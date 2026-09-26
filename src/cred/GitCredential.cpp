@@ -42,8 +42,10 @@ bool GitCredential::get(const QString &url, QString &username,
                         QString &password) {
   QProcess process;
   process.start(command(), {"get"});
-  if (!process.waitForStarted())
+  if (!process.waitForStarted()) {
+    log(QString("failed to start credential helper: %1").arg(command()));
     return false;
+  }
 
   QTextStream out(&process);
   out << "protocol=" << protocol(url) << Qt::endl;
@@ -77,8 +79,10 @@ bool GitCredential::store(const QString &url, const QString &username,
                           const QString &password) {
   QProcess process;
   process.start(command(), {"store"});
-  if (!process.waitForStarted())
+  if (!process.waitForStarted()) {
+    log(QString("failed to start credential helper: %1").arg(command()));
     return false;
+  }
 
   QTextStream out(&process);
   out << "protocol=" << protocol(url) << Qt::endl;
@@ -124,10 +128,10 @@ QString GitCredential::command() const {
       gitDir.cd("mingw32");
 #endif
 
-      gitDir.cd("bin");
-
-      candidate =
-          QStandardPaths::findExecutable(name, QStringList(gitDir.path()));
+      // Git for Windows installs some helpers (e.g. git-credential-manager)
+      // into bin and others (e.g. git-credential-wincred) into libexec/git-core.
+      candidate = QStandardPaths::findExecutable(
+          name, {gitDir.filePath("bin"), gitDir.filePath("libexec/git-core")});
       if (!candidate.isEmpty()) {
         return candidate;
       }
