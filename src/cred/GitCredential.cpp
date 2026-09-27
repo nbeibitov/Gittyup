@@ -129,7 +129,8 @@ QString GitCredential::command() const {
 #endif
 
       // Git for Windows installs some helpers (e.g. git-credential-manager)
-      // into bin and others (e.g. git-credential-wincred) into libexec/git-core.
+      // into bin and others (e.g. git-credential-wincred) into
+      // libexec/git-core.
       candidate = QStandardPaths::findExecutable(
           name, {gitDir.filePath("bin"), gitDir.filePath("libexec/git-core")});
       if (!candidate.isEmpty()) {
