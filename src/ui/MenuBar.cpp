@@ -1107,7 +1107,7 @@ void MenuBar::updateBranch() {
   mRebase->setEnabled(head.isValid());
   mSquash->setEnabled(head.isValid());
 
-  mInteractiveRebase->setEnabled(!view->repo().isBare() &&
+  mInteractiveRebase->setEnabled(head.isValid() && !view->repo().isBare() &&
                                  interactiveRebaseBase(view->repo()).isValid());
 
   bool merging = false;
