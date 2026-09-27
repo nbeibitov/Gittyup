@@ -31,6 +31,7 @@
 #include "dialogs/CommitDialog.h"
 #include "dialogs/DeleteBranchDialog.h"
 #include "dialogs/DeleteTagDialog.h"
+#include "dialogs/InteractiveRebaseDialog.h"
 #include "dialogs/NewBranchDialog.h"
 #include "dialogs/RemoteDialog.h"
 #include "dialogs/RenameBranchDialog.h"
@@ -666,6 +667,11 @@ void RepoView::visitLink(const QString &link) {
 
   if (action == "rebase") {
     merge(flags | Rebase, ref);
+    return;
+  }
+
+  if (action == "rebase-skip") {
+    skipInteractiveRebase();
     return;
   }
 
@@ -1410,12 +1416,39 @@ void RepoView::mergeAbort(LogEntry *parent) {
 }
 
 void RepoView::abortRebase() {
+  if (git::InteractiveRebase::isInProgress(mRepo)) {
+    LogEntry *parent = mInteractiveRebase
+                           ? mInteractiveRebase
+                           : addLogEntry(tr("interactive rebase"), tr("Abort"));
+    QString error;
+    git::InteractiveRebase rebase(mRepo);
+    if (rebase.abort(&error))
+      parent->addEntry(tr("Rebase aborted"), tr("Abort"));
+    if (!error.isEmpty())
+      parent->addEntry(LogEntry::Warning, error);
+
+    mInteractiveRebase = nullptr;
+    mDetails->setCommitMessage(QString());
+    refresh(false);
+    return;
+  }
+
   mRepo.rebaseAbort();
   mRebase = nullptr;
   refresh(false);
 }
 
 void RepoView::continueRebase() {
+  if (git::InteractiveRebase::isInProgress(mRepo)) {
+    if (!mInteractiveRebase)
+      mInteractiveRebase =
+          addLogEntry(tr("interactive rebase"), tr("Continue"));
+
+    git::InteractiveRebase rebase(mRepo);
+    interactiveRebaseResult(rebase.resume(mDetails->commitMessage()));
+    return;
+  }
+
   if (!mRebase) {
     // Rebase operation was started externally so before going on with rebasing,
     // create a log entry
@@ -1434,6 +1467,118 @@ void RepoView::rebase(const git::AnnotatedCommit &upstream, LogEntry *parent) {
   mRebase = parent;
 
   mRepo.rebase(upstream, mDetails->overrideUser(), mDetails->overrideEmail());
+}
+
+void RepoView::openInteractiveRebase(const git::Commit &base) {
+  InteractiveRebaseDialog *dialog =
+      new InteractiveRebaseDialog(mRepo, base, this);
+  connect(dialog, &QDialog::accepted, this, [this, dialog] {
+    interactiveRebase(dialog->base(), dialog->steps(), dialog->options());
+  });
+
+  dialog->open();
+}
+
+void RepoView::interactiveRebase(
+    const git::Commit &base, const QList<git::InteractiveRebase::Step> &steps,
+    const git::InteractiveRebase::Options &options) {
+  git::Reference head = mRepo.head();
+  QString name =
+      (head.isValid() && !mRepo.isHeadDetached()) ? head.name() : tr("HEAD");
+  mInteractiveRebase = addLogEntry(name, tr("Interactive Rebase"));
+
+  git::InteractiveRebase::Options opts = options;
+  opts.committerName = mDetails->overrideUser();
+  opts.committerEmail = mDetails->overrideEmail();
+
+  git::InteractiveRebase rebase(mRepo);
+  interactiveRebaseResult(rebase.start(base, steps, opts));
+}
+
+void RepoView::skipInteractiveRebase() {
+  if (!git::InteractiveRebase::isInProgress(mRepo))
+    return;
+
+  if (!mInteractiveRebase)
+    mInteractiveRebase = addLogEntry(tr("interactive rebase"), tr("Skip"));
+
+  mDetails->setCommitMessage(QString());
+  git::InteractiveRebase rebase(mRepo);
+  interactiveRebaseResult(rebase.skip());
+}
+
+void RepoView::interactiveRebaseResult(
+    const git::InteractiveRebase::Result &result) {
+  using Applied = git::InteractiveRebase::Applied;
+
+  LogEntry *entry = mInteractiveRebase;
+  if (!entry)
+    entry = addLogEntry(tr("interactive rebase"), tr("Interactive Rebase"));
+
+  for (const Applied &applied : result.applied) {
+    QString action = git::InteractiveRebase::actionName(applied.action);
+    QString before = mRepo.lookupCommit(applied.before).link();
+    QString text;
+    switch (applied.kind) {
+      case Applied::Rewritten:
+        text = tr("%1 %2 as %3")
+                   .arg(action, before, msg(mRepo.lookupCommit(applied.after)));
+        break;
+
+      case Applied::Unchanged:
+        text = tr("%1 %2 <i>unchanged</i>").arg(action, before);
+        break;
+
+      case Applied::Dropped:
+        text = tr("drop %1").arg(before);
+        break;
+
+      case Applied::Empty:
+        text = tr("%1 %2 <i>already applied</i>").arg(action, before);
+        break;
+    }
+
+    entry->addEntry(text, tr("Apply"));
+  }
+
+  git::InteractiveRebase rebase(mRepo);
+  git::InteractiveRebase::Step stopped = rebase.steps().value(result.step);
+  QString link = mRepo.lookupCommit(stopped.commit).link();
+
+  switch (result.status) {
+    case git::InteractiveRebase::Status::Finished:
+      entry->addEntry(tr("Rebase finished"), tr("Rebase"));
+      if (!result.error.isEmpty())
+        entry->addEntry(LogEntry::Warning, result.error);
+      mInteractiveRebase = nullptr;
+      mDetails->setCommitMessage(QString());
+      break;
+
+    case git::InteractiveRebase::Status::Conflict:
+      entry->addEntry(
+          tr("Resolve the conflicts of %1, stage the files and continue "
+             "rebasing. You can also <a href='action:rebase-skip'>skip</a> "
+             "this commit.")
+              .arg(link),
+          tr("Conflict"));
+      mDetails->setCommitMessage(rebase.pendingMessage().trimmed());
+      break;
+
+    case git::InteractiveRebase::Status::Edit:
+      entry->addEntry(tr("Stopped at %1. Amend it or add commits, then "
+                         "continue rebasing.")
+                          .arg(link),
+                      tr("Edit"));
+      break;
+
+    case git::InteractiveRebase::Status::Error:
+      entry->addEntry(LogEntry::Error, result.error);
+      if (!git::InteractiveRebase::isInProgress(mRepo))
+        mInteractiveRebase = nullptr;
+      break;
+  }
+
+  refresh(false);
 }
 
 void RepoView::rebaseInitError() {

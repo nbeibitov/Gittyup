@@ -43,6 +43,7 @@ private:
 
   friend class Blame;
   friend class Index;
+  friend class InteractiveRebase;
   friend class Repository;
 };
 
