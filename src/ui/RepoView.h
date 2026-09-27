@@ -19,6 +19,7 @@
 #include "git/Remote.h"
 #include "git/Repository.h"
 #include "git/Submodule.h"
+#include "git/InteractiveRebase.h"
 #include "git/Rebase.h"
 #include "host/Account.h"
 #include <QFuture>
@@ -212,6 +213,13 @@ public:
   // Continuouing the current ongoing rebase
   void continueRebase();
 
+  // interactive rebase of the commits after base
+  void openInteractiveRebase(const git::Commit &base);
+  void interactiveRebase(const git::Commit &base,
+                         const QList<git::InteractiveRebase::Step> &steps,
+                         const git::InteractiveRebase::Options &options);
+  void skipInteractiveRebase();
+
   // squash
   void squash(const git::AnnotatedCommit &upstream, LogEntry *parent);
 
@@ -361,6 +369,7 @@ private slots:
   void rebaseCommitSuccess(const git::Rebase rebase, const git::Commit before,
                            const git::Commit after, int currIndex);
   void rebaseConflict(const git::Rebase rebase);
+  void interactiveRebaseResult(const git::InteractiveRebase::Result &result);
 
 signals:
   void statusChanged(bool dirty);
@@ -425,6 +434,7 @@ private:
 
   LogEntry *mLogRoot;
   LogEntry *mRebase{nullptr};
+  LogEntry *mInteractiveRebase{nullptr};
   LogView *mLogView;
   QTimer mLogTimer;
   bool mIsLogVisible = false;

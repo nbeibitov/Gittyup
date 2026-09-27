@@ -31,6 +31,7 @@
 #include "dialogs/StartDialog.h"
 #include "dialogs/UpdateSubmodulesDialog.h"
 #include "editor/TextEditor.h"
+#include "git/Branch.h"
 #include "git/Reference.h"
 #include "git/Remote.h"
 #include "git/RevWalk.h"
@@ -206,6 +207,9 @@ static Hotkey mergeHotkey = HotkeyManager::registerHotkey(
 
 static Hotkey rebaseHotkey = HotkeyManager::registerHotkey(
     "Ctrl+Shift+R", "branch/rebase", "Branch/Rebase");
+
+static Hotkey interactiveRebaseHotkey = HotkeyManager::registerHotkey(
+    "Ctrl+Alt+R", "branch/interactiveRebase", "Branch/Interactive Rebase");
 
 static Hotkey abortHotkey = HotkeyManager::registerHotkey(
     "Ctrl+Shift+A", "branch/abort", "Branch/Abort Merge");
@@ -693,6 +697,22 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
     dialog->open();
   });
 
+  mInteractiveRebase = branch->addAction(tr("Interactive Rebase..."));
+  interactiveRebaseHotkey.use(mInteractiveRebase);
+  mInteractiveRebase->setToolTip(
+      tr("Rebase the commits that are not on the upstream branch"));
+  connect(mInteractiveRebase, &QAction::triggered, [this] {
+    RepoView *view = this->view();
+    git::Branch head = view->repo().head();
+    git::Branch upstream = head.isValid() ? head.upstream() : git::Branch();
+    if (!upstream.isValid())
+      return;
+
+    git::Commit base = view->repo().mergeBase(head.target(), upstream.target());
+    if (base.isValid())
+      view->openInteractiveRebase(base);
+  });
+
   mSquash = branch->addAction(tr("Squash..."));
   squashHotkey.use(mSquash);
   connect(mSquash, &QAction::triggered, [this] {
@@ -1066,6 +1086,19 @@ void MenuBar::updateBranch() {
   mMerge->setEnabled(head.isValid());
   mRebase->setEnabled(head.isValid());
   mSquash->setEnabled(head.isValid());
+
+  // Interactive rebase of the commits that are not on the upstream branch.
+  bool interactive = false;
+  if (head.isValid() && !view->repo().isHeadDetached() &&
+      view->repo().state() == GIT_REPOSITORY_STATE_NONE) {
+    git::Branch upstream = git::Branch(head).upstream();
+    if (upstream.isValid()) {
+      git::Commit tip = head.target();
+      git::Commit base = view->repo().mergeBase(tip, upstream.target());
+      interactive = base.isValid() && base.id() != tip.id();
+    }
+  }
+  mInteractiveRebase->setEnabled(interactive);
 
   bool merging = false;
   QString text = tr("Merge");

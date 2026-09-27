@@ -17,6 +17,7 @@
 #include "Filter.h"
 #include "FilterList.h"
 #include "Index.h"
+#include "InteractiveRebase.h"
 #include "Patch.h"
 #include "qtsupport.h"
 #include "Rebase.h"
@@ -1003,7 +1004,7 @@ void Repository::rebaseContinue(const QString &commitMessage) {
 
 bool Repository::rebaseOngoing() {
   Rebase r = rebaseOpen();
-  return r.isValid();
+  return r.isValid() || InteractiveRebase::isInProgress(*this);
 }
 
 bool Repository::cherryPick(const Commit &commit) {

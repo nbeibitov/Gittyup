@@ -1780,6 +1780,18 @@ void CommitList::contextMenuEvent(QContextMenuEvent *event) {
         dialog->open();
       });
 
+      // Rebase the commits from this one up to HEAD.
+      QAction *interactive =
+          menu.addAction(tr("Interactive Rebase from Here..."), [view, commit] {
+            view->openInteractiveRebase(commit.parents().first());
+          });
+      git::Commit headCommit = view->repo().head().target();
+      interactive->setEnabled(
+          !view->repo().isBare() &&
+          view->repo().state() == GIT_REPOSITORY_STATE_NONE &&
+          commit.parents().size() == 1 && headCommit.isValid() &&
+          view->repo().mergeBase(commit, headCommit).id() == commit.id());
+
       menu.addSeparator();
 
       menu.addAction(tr("Revert"), [view, commit] { view->revert(commit); });

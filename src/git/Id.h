@@ -42,6 +42,7 @@ private:
   git_oid d;
 
   friend class Index;
+  friend class InteractiveRebase;
   friend class Repository;
 };
 

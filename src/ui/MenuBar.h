@@ -120,6 +120,7 @@ private:
   QAction *mMerge;
   QAction *mRebase;
   QAction *mSquash;
+  QAction *mInteractiveRebase;
   QAction *mAbort;
 
   // Submodule
