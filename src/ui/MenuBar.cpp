@@ -64,6 +64,30 @@ void openCloneDialog(CloneDialog::Kind kind) {
   dialog->open();
 }
 
+// Base of the default interactive rebase range: the commits that are not on
+// the upstream branch, or the last commit if there are none. More (already
+// pushed) commits can be added in the dialog.
+git::Commit interactiveRebaseBase(const git::Repository &repo) {
+  git::Branch head = repo.head();
+  if (!head.isValid() || repo.state() != GIT_REPOSITORY_STATE_NONE)
+    return git::Commit();
+
+  git::Commit tip = head.target();
+  if (!tip.isValid())
+    return git::Commit();
+
+  git::Branch upstream =
+      repo.isHeadDetached() ? git::Branch() : head.upstream();
+  if (upstream.isValid()) {
+    git::Commit base = repo.mergeBase(tip, upstream.target());
+    if (base.isValid() && base.id() != tip.id())
+      return base;
+  }
+
+  QList<git::Commit> parents = tip.parents();
+  return (parents.size() == 1) ? parents.first() : git::Commit();
+}
+
 } // namespace
 
 const QString MenuBar::donationUrlLiberapay =
@@ -700,15 +724,11 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
   mInteractiveRebase = branch->addAction(tr("Interactive Rebase..."));
   interactiveRebaseHotkey.use(mInteractiveRebase);
   mInteractiveRebase->setToolTip(
-      tr("Rebase the commits that are not on the upstream branch"));
+      tr("Rebase the commits that are not on the upstream branch (or the "
+         "last commit); older commits can be added in the dialog"));
   connect(mInteractiveRebase, &QAction::triggered, [this] {
     RepoView *view = this->view();
-    git::Branch head = view->repo().head();
-    git::Branch upstream = head.isValid() ? head.upstream() : git::Branch();
-    if (!upstream.isValid())
-      return;
-
-    git::Commit base = view->repo().mergeBase(head.target(), upstream.target());
+    git::Commit base = interactiveRebaseBase(view->repo());
     if (base.isValid())
       view->openInteractiveRebase(base);
   });
@@ -1087,18 +1107,8 @@ void MenuBar::updateBranch() {
   mRebase->setEnabled(head.isValid());
   mSquash->setEnabled(head.isValid());
 
-  // Interactive rebase of the commits that are not on the upstream branch.
-  bool interactive = false;
-  if (head.isValid() && !view->repo().isHeadDetached() &&
-      view->repo().state() == GIT_REPOSITORY_STATE_NONE) {
-    git::Branch upstream = git::Branch(head).upstream();
-    if (upstream.isValid()) {
-      git::Commit tip = head.target();
-      git::Commit base = view->repo().mergeBase(tip, upstream.target());
-      interactive = base.isValid() && base.id() != tip.id();
-    }
-  }
-  mInteractiveRebase->setEnabled(interactive);
+  mInteractiveRebase->setEnabled(!view->repo().isBare() &&
+                                 interactiveRebaseBase(view->repo()).isValid());
 
   bool merging = false;
   QString text = tr("Merge");

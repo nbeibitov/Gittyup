@@ -57,6 +57,7 @@ private slots:
   void dialogValidation();
   void dialogSquashMessage();
   void dialogAutosquash();
+  void dialogIncludeOlderCommit();
 
 private:
   void writeFile(const QString &name, const QString &content);
@@ -599,6 +600,46 @@ void TestInteractiveRebase::dialogAutosquash() {
   QCOMPARE(steps.at(1).commit, fixupA.id());
   QVERIFY(steps.at(1).action == Action::Fixup);
   QCOMPARE(steps.at(2).commit, mB.id());
+
+  delete dialog;
+}
+
+void TestInteractiveRebase::dialogIncludeOlderCommit() {
+  createThreeCommits();
+
+  // Start with the last commit only, then extend the range backwards.
+  InteractiveRebaseDialog *dialog = new InteractiveRebaseDialog(mRepo, mB);
+  QVERIFY(dialog->error().isEmpty());
+  QCOMPARE(dialog->steps().size(), 1);
+
+  dialog->setAction(0, Action::Reword);
+  dialog->includeOlderCommit();
+  QCOMPARE(dialog->base().id(), mA.id());
+  QList<Step> steps = dialog->steps();
+  QCOMPARE(steps.size(), 2);
+  QCOMPARE(steps.at(0).commit, mB.id());
+  QVERIFY(steps.at(0).action == Action::Pick);
+  QCOMPARE(steps.at(1).commit, mC.id());
+  QVERIFY(steps.at(1).action == Action::Reword);
+
+  dialog->includeOlderCommit();
+  QCOMPARE(dialog->base().id(), mBase.id());
+  QCOMPARE(dialog->steps().size(), 3);
+
+  // The root commit cannot be included.
+  if (mBase.parents().isEmpty()) {
+    dialog->includeOlderCommit();
+    QCOMPARE(dialog->base().id(), mBase.id());
+    QCOMPARE(dialog->steps().size(), 3);
+  }
+
+  dialog->setAction(0, Action::Drop);
+  dialog->setAction(2, Action::Pick);
+  InteractiveRebase rebase(mRepo);
+  auto result =
+      rebase.start(dialog->base(), dialog->steps(), dialog->options());
+  VERIFY_STATUS(result, Status::Finished);
+  QCOMPARE(history(), QStringList({"B", "C"}));
 
   delete dialog;
 }

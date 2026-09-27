@@ -45,6 +45,9 @@ public:
   void moveRow(int row, int delta);
   void applyAutosquash();
 
+  // Extend the range by the parent of the base commit.
+  void includeOlderCommit();
+
 private:
   QTreeWidgetItem *createItem(const git::Commit &commit) const;
   Action action(const QTreeWidgetItem *item) const;
@@ -59,6 +62,7 @@ private:
   void updateMessageEditor();
   void storeMessage();
   void updateState();
+  void updateRange();
 
   git::Repository mRepo;
   git::Commit mBase;
@@ -66,6 +70,8 @@ private:
   QString mError;
   bool mUpdatingMessage = false;
 
+  QLabel *mRange;
+  QPushButton *mOlder;
   QTreeWidget *mList;
   QComboBox *mAction;
   QLabel *mMessageLabel;

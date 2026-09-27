@@ -79,16 +79,17 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
 
   mCommits = git::InteractiveRebase::commits(repo, base, &mError);
 
-  git::Reference head = repo.head();
-  QString name = (head.isValid() && !repo.isHeadDetached())
-                     ? head.name()
-                     : tr("detached HEAD");
-  QLabel *label =
-      new QLabel(tr("Rebase %n commit(s) of <b>%1</b> onto %2 <i>%3</i>",
-                    nullptr, mCommits.size())
-                     .arg(name.toHtmlEscaped(), base.shortId(),
-                          base.summary().toHtmlEscaped()),
-                 this);
+  mRange = new QLabel(this);
+
+  mOlder = new QPushButton(tr("Include Older Commit"), this);
+  mOlder->setToolTip(tr("Add the parent of the base commit to the rebase. "
+                        "Rewriting pushed commits requires a force push."));
+  connect(mOlder, &QPushButton::clicked, this,
+          &InteractiveRebaseDialog::includeOlderCommit);
+
+  QHBoxLayout *range = new QHBoxLayout;
+  range->addWidget(mRange, 1);
+  range->addWidget(mOlder);
 
   QLabel *hint = new QLabel(
       tr("Drag commits to reorder them. Keys: P pick, R reword, E edit, "
@@ -189,7 +190,7 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
   QVBoxLayout *layout = new QVBoxLayout(this);
-  layout->addWidget(label);
+  layout->addLayout(range);
   layout->addWidget(hint);
   layout->addLayout(actions);
   layout->addWidget(splitter, 1);
@@ -234,6 +235,7 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
     up->setEnabled(false);
     down->setEnabled(false);
     autosquash->setEnabled(false);
+    mOlder->setEnabled(false);
   } else if (mList->topLevelItemCount() > 0) {
     mList->setCurrentItem(mList->topLevelItem(0));
   }
@@ -241,6 +243,7 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
   for (int i = 0; i < mList->topLevelItemCount(); ++i)
     updateItem(mList->topLevelItem(i));
 
+  updateRange();
   updateMessageEditor();
   updateState();
   resize(860, 600);
@@ -316,6 +319,25 @@ void InteractiveRebaseDialog::applyAutosquash() {
   if (mList->topLevelItemCount() > 0)
     mList->setCurrentItem(mList->topLevelItem(0));
 
+  updateMessageEditor();
+  updateState();
+}
+
+void InteractiveRebaseDialog::includeOlderCommit() {
+  if (!mError.isEmpty() || !mBase.isValid() || mBase.parents().size() != 1)
+    return;
+
+  // Commits are listed oldest first, so the old base goes to the top.
+  git::Commit commit = mBase;
+  mBase = commit.parents().first();
+  mCommits.prepend(commit);
+
+  QTreeWidgetItem *item = createItem(commit);
+  mList->insertTopLevelItem(0, item);
+  updateItem(item);
+  mList->scrollToItem(item);
+
+  updateRange();
   updateMessageEditor();
   updateState();
 }
@@ -551,4 +573,19 @@ void InteractiveRebaseDialog::updateState() {
 
   mStatus->setText(text);
   mAccept->setEnabled(true);
+}
+
+void InteractiveRebaseDialog::updateRange() {
+  git::Reference head = mRepo.head();
+  QString name = (head.isValid() && !mRepo.isHeadDetached())
+                     ? head.name()
+                     : tr("detached HEAD");
+  mRange->setText(tr("Rebase %n commit(s) of <b>%1</b> onto %2 <i>%3</i>",
+                     nullptr, mCommits.size())
+                      .arg(name.toHtmlEscaped(), mBase.shortId(),
+                           mBase.summary().toHtmlEscaped()));
+
+  // Merge and root commits cannot be rebased interactively.
+  mOlder->setEnabled(mError.isEmpty() && mBase.isValid() &&
+                     mBase.parents().size() == 1);
 }
