@@ -45,6 +45,9 @@ public:
     // Committer override. Empty means the repository default signature.
     QString committerName;
     QString committerEmail;
+    // Commit to apply the steps onto. Invalid means the base commit, i.e.
+    // the commits are rewritten in place.
+    Id onto;
   };
 
   enum class Status { Finished, Conflict, Edit, Error };
@@ -91,7 +94,8 @@ public:
   static QString actionName(Action action);
   static bool actionFromName(const QString &name, Action &action);
 
-  // Start rebasing HEAD onto base (exclusive) following the steps.
+  // Start rebasing the commits after base (exclusive) up to HEAD following
+  // the steps, onto options.onto or base.
   Result start(const Commit &base, const QList<Step> &steps,
                const Options &options);
 

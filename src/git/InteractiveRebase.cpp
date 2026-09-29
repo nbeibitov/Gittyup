@@ -336,15 +336,20 @@ InteractiveRebase::Result InteractiveRebase::start(const Commit &base,
   State state;
   state.steps = steps;
   state.options = options;
-  state.onto = base.id();
+  state.onto = options.onto.isValid() ? options.onto : base.id();
   state.origHead = Id(git_reference_target(head.get()));
   state.headName = git_reference_is_branch(head.get())
                        ? QString::fromUtf8(git_reference_name(head.get()))
                        : kDetachedHead;
 
-  if (state.origHead != state.onto &&
-      git_graph_descendant_of(repo, state.origHead, state.onto) != 1) {
+  if (state.origHead != base.id() &&
+      git_graph_descendant_of(repo, state.origHead, base.id()) != 1) {
     result.error = tr("The base commit is not an ancestor of HEAD.");
+    return result;
+  }
+
+  if (!lookupCommit(repo, state.onto)) {
+    result.error = tr("Commit %1 not found.").arg(state.onto.toString());
     return result;
   }
 
