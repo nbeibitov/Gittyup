@@ -12,6 +12,7 @@
 
 #include "git/Commit.h"
 #include "git/InteractiveRebase.h"
+#include "git/Reference.h"
 #include "git/Repository.h"
 #include <QDialog>
 
@@ -48,6 +49,10 @@ public:
   // Extend the range by the parent of the base commit.
   void includeOlderCommit();
 
+  // Rebase onto the target of ref instead of rewriting the commits in place
+  // (invalid ref). The range is extended back to the merge base with ref.
+  void setOnto(const git::Reference &ref);
+
 private:
   QTreeWidgetItem *createItem(const git::Commit &commit) const;
   Action action(const QTreeWidgetItem *item) const;
@@ -63,14 +68,17 @@ private:
   void storeMessage();
   void updateState();
   void updateRange();
+  bool prependBase();
 
   git::Repository mRepo;
   git::Commit mBase;
+  git::Reference mOntoRef;
   QList<git::Commit> mCommits;
   QString mError;
   bool mUpdatingMessage = false;
 
   QLabel *mRange;
+  QComboBox *mOnto;
   QPushButton *mOlder;
   QTreeWidget *mList;
   QComboBox *mAction;

@@ -87,8 +87,32 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
   connect(mOlder, &QPushButton::clicked, this,
           &InteractiveRebaseDialog::includeOlderCommit);
 
+  // Branches to rebase onto. The first entry rewrites the commits in place.
+  mOnto = new QComboBox(this);
+  mOnto->setObjectName("InteractiveRebaseOnto");
+  mOnto->addItem(tr("Keep in place (base commit)"));
+  git::Reference current = repo.head();
+  for (git_branch_t type : {GIT_BRANCH_LOCAL, GIT_BRANCH_REMOTE}) {
+    for (const git::Branch &branch : repo.branches(type)) {
+      if (branch.qualifiedName() == current.qualifiedName() ||
+          branch.name().endsWith("/HEAD"))
+        continue;
+
+      mOnto->addItem(branch.name(),
+                     QVariant::fromValue<git::Reference>(branch));
+    }
+  }
+  mOnto->setToolTip(tr("Move the commits onto another branch, like "
+                       "'git rebase -i <branch>'"));
+  connect(mOnto, QOverload<int>::of(&QComboBox::activated), this,
+          [this](int index) {
+            setOnto(mOnto->itemData(index).value<git::Reference>());
+          });
+
   QHBoxLayout *range = new QHBoxLayout;
   range->addWidget(mRange, 1);
+  range->addWidget(new QLabel(tr("Onto:"), this));
+  range->addWidget(mOnto);
   range->addWidget(mOlder);
 
   QLabel *hint = new QLabel(
@@ -236,6 +260,7 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
     down->setEnabled(false);
     autosquash->setEnabled(false);
     mOlder->setEnabled(false);
+    mOnto->setEnabled(false);
   } else if (mList->topLevelItemCount() > 0) {
     mList->setCurrentItem(mList->topLevelItem(0));
   }
@@ -270,6 +295,8 @@ git::InteractiveRebase::Options InteractiveRebaseDialog::options() const {
   result.autostash = mAutostash->isChecked();
   result.keepEmpty = mKeepEmpty->isChecked();
   result.committerDateIsAuthorDate = mCommitterDate->isChecked();
+  if (mOntoRef.isValid())
+    result.onto = mOntoRef.target().id();
   return result;
 }
 
@@ -324,8 +351,43 @@ void InteractiveRebaseDialog::applyAutosquash() {
 }
 
 void InteractiveRebaseDialog::includeOlderCommit() {
-  if (!mError.isEmpty() || !mBase.isValid() || mBase.parents().size() != 1)
+  if (!prependBase())
     return;
+
+  mList->scrollToItem(mList->topLevelItem(0));
+  updateRange();
+  updateMessageEditor();
+  updateState();
+}
+
+void InteractiveRebaseDialog::setOnto(const git::Reference &ref) {
+  if (!mError.isEmpty())
+    return;
+
+  mOntoRef = ref;
+  int index = ref.isValid() ? mOnto->findText(ref.name()) : 0;
+  if (index >= 0)
+    mOnto->setCurrentIndex(index);
+
+  // Include all commits that are not on the new upstream, like
+  // 'git rebase -i <branch>' does. Merge and root commits stop the range.
+  git::Commit tip = mRepo.head().target();
+  git::Commit target = ref.isValid() ? ref.target() : git::Commit();
+  git::Commit base = target.isValid() ? mRepo.mergeBase(tip, target)
+                                      : git::Commit();
+  if (base.isValid() && mRepo.mergeBase(base, mBase).id() == base.id()) {
+    while (mBase.id() != base.id() && prependBase())
+      ;
+  }
+
+  updateRange();
+  updateMessageEditor();
+  updateState();
+}
+
+bool InteractiveRebaseDialog::prependBase() {
+  if (!mError.isEmpty() || !mBase.isValid() || mBase.parents().size() != 1)
+    return false;
 
   // Commits are listed oldest first, so the old base goes to the top.
   git::Commit commit = mBase;
@@ -335,11 +397,7 @@ void InteractiveRebaseDialog::includeOlderCommit() {
   QTreeWidgetItem *item = createItem(commit);
   mList->insertTopLevelItem(0, item);
   updateItem(item);
-  mList->scrollToItem(item);
-
-  updateRange();
-  updateMessageEditor();
-  updateState();
+  return true;
 }
 
 QTreeWidgetItem *
@@ -543,7 +601,8 @@ void InteractiveRebaseDialog::updateState() {
     return;
   }
 
-  bool changed = false;
+  // Rebasing onto another commit changes the history even with all picks.
+  bool changed = mOntoRef.isValid() && mOntoRef.target().id() != mBase.id();
   for (int i = 0; i < list.size() && !changed; ++i) {
     const git::InteractiveRebase::Step &step = list.at(i);
     changed = step.action != Action::Pick ||
@@ -580,10 +639,15 @@ void InteractiveRebaseDialog::updateRange() {
   QString name = (head.isValid() && !mRepo.isHeadDetached())
                      ? head.name()
                      : tr("detached HEAD");
+  git::Commit onto = mOntoRef.isValid() ? mOntoRef.target() : mBase;
+  QString target = mOntoRef.isValid()
+                       ? QString("<b>%1</b> %2").arg(
+                             mOntoRef.name().toHtmlEscaped(), onto.shortId())
+                       : onto.shortId();
   mRange->setText(tr("Rebase %n commit(s) of <b>%1</b> onto %2 <i>%3</i>",
                      nullptr, mCommits.size())
-                      .arg(name.toHtmlEscaped(), mBase.shortId(),
-                           mBase.summary().toHtmlEscaped()));
+                      .arg(name.toHtmlEscaped(), target,
+                           onto.summary().toHtmlEscaped()));
 
   // Merge and root commits cannot be rebased interactively.
   mOlder->setEnabled(mError.isEmpty() && mBase.isValid() &&

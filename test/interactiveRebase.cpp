@@ -9,6 +9,7 @@
 
 #include "Test.h"
 #include "dialogs/InteractiveRebaseDialog.h"
+#include "git/Branch.h"
 #include "git/Commit.h"
 #include "git/Index.h"
 #include "git/InteractiveRebase.h"
@@ -58,6 +59,8 @@ private slots:
   void dialogSquashMessage();
   void dialogAutosquash();
   void dialogIncludeOlderCommit();
+  void onto();
+  void dialogOnto();
 
 private:
   void writeFile(const QString &name, const QString &content);
@@ -640,6 +643,44 @@ void TestInteractiveRebase::dialogIncludeOlderCommit() {
       rebase.start(dialog->base(), dialog->steps(), dialog->options());
   VERIFY_STATUS(result, Status::Finished);
   QCOMPARE(history(), QStringList({"B", "C"}));
+
+  delete dialog;
+}
+
+void TestInteractiveRebase::onto() {
+  createThreeCommits();
+
+  // Move C from B onto A, which leaves B out (git rebase --onto A B).
+  InteractiveRebase::Options options;
+  options.onto = mA.id();
+  InteractiveRebase rebase(mRepo);
+  auto result = rebase.start(mB, {step(Action::Pick, mC)}, options);
+  VERIFY_STATUS(result, Status::Finished);
+  QCOMPARE(history(), QStringList({"A", "C"}));
+  QCOMPARE(branchName(), mBranch);
+  QCOMPARE(readFile("b.txt"), QString());
+  QCOMPARE(readFile("c.txt"), QString("c\n"));
+}
+
+void TestInteractiveRebase::dialogOnto() {
+  createThreeCommits();
+  git::Branch other = mRepo.createBranch("other", mA);
+  QVERIFY(other.isValid());
+
+  // Selecting a branch extends the range back to the merge base.
+  InteractiveRebaseDialog *dialog = new InteractiveRebaseDialog(mRepo, mB);
+  QVERIFY(dialog->error().isEmpty());
+  QCOMPARE(dialog->steps().size(), 1);
+
+  dialog->setOnto(other);
+  QCOMPARE(dialog->base().id(), mA.id());
+  QCOMPARE(dialog->steps().size(), 2);
+  QCOMPARE(dialog->options().onto, mA.id());
+
+  // Back to rewriting in place.
+  dialog->setOnto(git::Reference());
+  QVERIFY(!dialog->options().onto.isValid());
+  QCOMPARE(dialog->steps().size(), 2);
 
   delete dialog;
 }
