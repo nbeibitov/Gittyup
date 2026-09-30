@@ -217,6 +217,9 @@ public:
   // Stop the ongoing rebase but keep HEAD and the working tree
   void quitRebase();
 
+  // Write the commit-graph in the background if it is missing or outdated
+  void updateCommitGraph();
+
   // interactive rebase of the commits after base
   void openInteractiveRebase(const git::Commit &base);
   void interactiveRebase(const git::Commit &base,
@@ -448,6 +451,8 @@ private:
   QTimer mFetchTimer;
   RemoteCallbacks *mCallbacks = nullptr;
   QFutureWatcher<git::Result> *mWatcher = nullptr;
+  QFutureWatcher<bool> mCommitGraph;
+  bool mReloadCommitGraph = false;
 
   QList<QWidget *> mTrackedWindows;
 

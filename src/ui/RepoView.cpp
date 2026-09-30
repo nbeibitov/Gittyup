@@ -39,6 +39,7 @@
 #include "dialogs/SettingsDialog.h"
 #include "dialogs/TagDialog.h"
 #include "editor/TextEditor.h"
+#include "git/CommitGraph.h"
 #include "git/Config.h"
 #include "git/Index.h"
 #include "git/Rebase.h"
@@ -469,6 +470,25 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
   // Connect automatic fetch timer.
   connect(&mFetchTimer, &QTimer::timeout, this,
           [this] { fetch(git::Remote(), false, false); });
+
+  // Use a new commit-graph once no history walk runs on another thread.
+  // Reloading frees the old one, which such a walk might still read.
+  connect(&mCommitGraph, &QFutureWatcher<bool>::finished, this, [this] {
+    mReloadCommitGraph = mCommitGraph.result();
+    if (mReloadCommitGraph && !isLoading()) {
+      mReloadCommitGraph = false;
+      git::CommitGraph::reload(mRepo);
+    }
+  });
+  connect(this, &RepoView::loadingChanged, this, [this](bool loading) {
+    if (!loading && mReloadCommitGraph) {
+      mReloadCommitGraph = false;
+      git::CommitGraph::reload(mRepo);
+    }
+  });
+
+  // Don't compete with loading the repository.
+  QTimer::singleShot(10000, this, &RepoView::updateCommitGraph);
 }
 
 void RepoView::diffSelected(const git::Diff diff, const QString &file,
@@ -1054,6 +1074,7 @@ QFuture<git::Result> RepoView::fetch(const git::Remote &rmt, bool tags,
           }
         } else {
           mCallbacks->storeDeferredCredentials();
+          updateCommitGraph();
           if (entry->entries().isEmpty()) {
             entry->addEntry(tr("Everything up-to-date."));
           } else if (!interactive) {
@@ -1492,6 +1513,26 @@ void RepoView::continueRebase() {
     mRebase = addLogEntry(tr(""), tr("Continue ongoing rebase"));
   }
   mRepo.rebaseContinue(mDetails->commitMessage());
+}
+
+void RepoView::updateCommitGraph() {
+  if (mCommitGraph.isRunning() || !git::CommitGraph::isOutdated(mRepo))
+    return;
+
+  QString dir = mRepo.dir().path();
+  mCommitGraph.setFuture(QtConcurrent::run([dir] {
+    QThread *thread = QThread::currentThread();
+    QThread::Priority priority = thread->priority();
+    thread->setPriority(QThread::LowestPriority);
+
+    QString error;
+    bool written = git::CommitGraph::write(dir, &error);
+    if (!written)
+      Debug("Unable to write the commit-graph: " << error);
+
+    thread->setPriority(priority);
+    return written;
+  }));
 }
 
 void RepoView::quitRebase() {

@@ -6,6 +6,7 @@ add_library(
   Branch.cpp
   Command.cpp
   Commit.cpp
+  CommitGraph.cpp
   Config.cpp
   Diff.cpp
   Filter.cpp

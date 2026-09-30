@@ -301,6 +301,7 @@ private:
 
   friend class Branch;
   friend class Commit;
+  friend class CommitGraph;
   friend class Config;
   friend class Index;
   friend class Object;
