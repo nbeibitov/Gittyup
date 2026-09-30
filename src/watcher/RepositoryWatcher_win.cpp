@@ -15,11 +15,12 @@
 
 namespace {
 
+// Last access and security changes don't affect the status. Reading files
+// (e.g. while computing the status) could otherwise trigger a refresh.
 const uint kFlags =
     (FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
      FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_SIZE |
-     FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_LAST_ACCESS |
-     FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_SECURITY);
+     FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION);
 
 } // namespace
 
@@ -85,12 +86,22 @@ public:
 
   static void CALLBACK notify(DWORD errorCode, DWORD numBytes,
                               LPOVERLAPPED overlapped) {
-    if (errorCode || !numBytes)
-      return; // FIXME: Report error?
-
-    // Copy buffer and restart.
     DirectoryChangesThread *watcher =
         static_cast<DirectoryChangesThread *>(overlapped->hEvent);
+
+    // The buffer overflowed: the changes are unknown, but something changed.
+    // Keep watching, otherwise no further notifications arrive.
+    if (errorCode == ERROR_NOTIFY_ENUM_DIR || (!errorCode && !numBytes)) {
+      watcher->watch();
+      emit watcher->notificationReceived();
+      return;
+    }
+
+    // Other errors (e.g. the handle was closed) end watching.
+    if (errorCode)
+      return;
+
+    // Copy buffer and restart.
     QVector<BYTE> buffer = watcher->buffer();
     watcher->watch();
 

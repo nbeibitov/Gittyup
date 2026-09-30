@@ -35,6 +35,7 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSet>
 #include <QPushButton>
 #include <QStyledItemDelegate>
 #include <QTextLayout>
@@ -95,7 +96,10 @@ public:
     // Connect watcher to signal when the status diff finishes.
     connect(&mStatus, &QFutureWatcher<git::Diff>::finished, [this] {
       mTimer.stop();
-      dispatchResetWalker(true);
+      // A change in the working directory only affects the status row.
+      // Rebuilding the walker means walking the whole history again.
+      if (mResetAfterStatus || !updateStatusRow())
+        dispatchResetWalker(true);
     });
 
     // Apply the result of an asynchronous walker reset on the GUI thread.
@@ -134,7 +138,14 @@ public:
     return future.result();
   }
 
-  void startStatus() {
+  // Recompute the status. The walker is rebuilt afterwards unless only the
+  // working directory changed (resetWalkerAfter false), in which case just
+  // the status row is updated when possible.
+  void startStatus(bool resetWalkerAfter = true) {
+    // Keep a pending walker reset of a status check that gets replaced.
+    mResetAfterStatus =
+        resetWalkerAfter || (mStatus.isRunning() && mResetAfterStatus);
+
     // Cancel existing status diff.
     cancelStatus();
 
@@ -197,6 +208,12 @@ public:
     }
   }
 
+  // The working directory changed. Only the status of HEAD is shown.
+  void refreshStatus() {
+    if (!mRef.isValid() || mRef.isHead())
+      startStatus(false);
+  }
+
   // Rebuild the walker and the first page of rows. The expensive part
   // (building the revwalk over all refs and computing the graph for the
   // first page of commits) runs on a background thread; see
@@ -220,7 +237,7 @@ public:
   }
 
   void fetchMore(const QModelIndex &parent) {
-    FetchResult fetched = fetchRows(mWalker, mParents, mRows, mPathspec,
+    FetchResult fetched = fetchRows(mWalker, mParents, mSeen, mPathspec,
                                     mGraphVisible, mRefsFilter);
 
     // Update the model.
@@ -318,6 +335,8 @@ public:
 
 signals:
   void statusFinished(bool visible);
+  // The status row was updated in place without resetting the model.
+  void statusRowUpdated();
   void loadingChanged(bool loading);
 
 private:
@@ -374,6 +393,11 @@ private:
     QList<Parent> parents;
     QList<Row> rows;
     git::RevWalk walker;
+    QSet<git::Id> seen;
+
+    // HEAD when the rows were built, and whether the status was known then.
+    git::Id head;
+    bool statusCheckFinished = false;
 
     // Whether this particular reset was triggered by the status check
     // finishing, and should therefore emit statusFinished() once applied.
@@ -393,22 +417,6 @@ private:
     }
 
     return -1;
-  }
-
-  static bool contains(const git::Commit &commit,
-                       const QList<Row> &existingRows,
-                       const QList<Row> &newRows) {
-    for (const Row &row : existingRows) {
-      if (row.commit == commit)
-        return true;
-    }
-
-    for (const Row &row : newRows) {
-      if (row.commit == commit)
-        return true;
-    }
-
-    return false;
   }
 
   // The commit and parents parameters represent the current row.
@@ -506,8 +514,8 @@ private:
   // 'this' state) so it can run on a background thread as well as
   // synchronously from fetchMore().
   static FetchResult fetchRows(git::RevWalk &walker, QList<Parent> &parents,
-                               const QList<Row> &existingRows,
-                               const QString &pathspec, bool graphVisible,
+                               QSet<git::Id> &seen, const QString &pathspec,
+                               bool graphVisible,
                                CommitList::RefsFilter refsFilter) {
     FetchResult result;
     int i = 0;
@@ -528,8 +536,7 @@ private:
       QList<git::Commit> replacements;
       for (const git::Commit &parent : commit.parents()) {
         // FIXME: Mark commits that point to existing parent?
-        if (indexOf(parents, parent) < 0 &&
-            !contains(parent, existingRows, result.rows))
+        if (indexOf(parents, parent) < 0 && !seen.contains(parent.id()))
           replacements.append(parent);
         if (refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge) {
           break;
@@ -554,6 +561,7 @@ private:
         row = columns(commit, rowParents, parents, root);
 
       result.rows.append(Row(commit, row));
+      seen.insert(commit.id());
       DebugRefresh("Append commit: " << commit.shortId());
 
       // Bail out.
@@ -572,6 +580,9 @@ private:
   // result rather than mutating model state directly.
   static ResetResult computeReset(const ResetContext &ctx) {
     ResetResult result;
+    result.statusCheckFinished = ctx.statusCheckFinished;
+    if (git::Reference head = ctx.repo.head())
+      result.head = head.target().id();
 
     // Update status row.
     bool head = (!ctx.ref.isValid() || ctx.ref.isHead());
@@ -622,7 +633,7 @@ private:
 
     if (result.walker.isValid()) {
       FetchResult fetched =
-          fetchRows(result.walker, result.parents, result.rows, ctx.pathspec,
+          fetchRows(result.walker, result.parents, result.seen, ctx.pathspec,
                     ctx.graphVisible, ctx.refsFilter);
       result.rows.append(fetched.rows);
       if (fetched.exhausted)
@@ -659,9 +670,44 @@ private:
     mParents = std::move(result.parents);
     mRows = std::move(result.rows);
     mWalker = std::move(result.walker);
+    mSeen = std::move(result.seen);
+    mRowsHead = result.head;
+    mRowsHaveStatus = result.statusCheckFinished;
     DebugRefresh("");
     endResetModel();
     emit loadingChanged(false);
+  }
+
+  // Update the status row in place after the status check finished.
+  // Returns false if the rows have to be rebuilt instead.
+  bool updateStatusRow() {
+    // The rows must be complete and built with a known status.
+    if (mReset.isRunning() || !mRowsHaveStatus)
+      return false;
+
+    // HEAD moved (e.g. a checkout on the command line).
+    git::Reference head = mRepo.head();
+    git::Id id = head.isValid() ? head.target().id() : git::Id();
+    if (id != mRowsHead)
+      return false;
+
+    // The status row (and the graph below it) appears or disappears.
+    bool isHead = (!mRef.isValid() || mRef.isHead());
+    bool wanted = mShowCleanStatus && isHead && status().isValid() &&
+                  mPathspec.isEmpty();
+    bool present = !mRows.isEmpty() && !mRows.first().commit.isValid();
+    if (wanted != present)
+      return false;
+
+    if (present) {
+      QModelIndex idx = index(0, 0);
+      emit dataChanged(idx, idx);
+    }
+
+    emit loadingChanged(false);
+    emit statusRowUpdated();
+    emit statusFinished(present);
+    return true;
   }
 
   QTimer mTimer;
@@ -679,6 +725,12 @@ private:
 
   QList<Row> mRows;
   QList<Parent> mParents;
+  QSet<git::Id> mSeen; // commits in mRows
+
+  // State of the rows for updating the status row in place.
+  git::Id mRowsHead;
+  bool mRowsHaveStatus = false;
+  bool mResetAfterStatus = true;
 
   // walker settings
   bool mSuppressResetWalker{false};
@@ -1353,8 +1405,18 @@ CommitList::CommitList(Index *index, QWidget *parent)
             mRestoreSelection = restoreSelection;
             resetReference(ref);
           });
-  connect(notifier, &git::RepositoryNotifier::workdirChanged, [this] {
-    resetReference(static_cast<const CommitModel *>(mModel)->reference());
+  connect(notifier, &git::RepositoryNotifier::workdirChanged,
+          [model] { model->refreshStatus(); });
+
+  // Show the new status if the status row is selected.
+  connect(model, &CommitModel::statusRowUpdated, this, [this] {
+    for (const QModelIndex &index : selectedIndexes()) {
+      if (index.row() == 0 &&
+          !index.data(CommitRole).value<git::Commit>().isValid()) {
+        notifySelectionChanged();
+        break;
+      }
+    }
   });
 
   connect(this, &CommitList::entered,

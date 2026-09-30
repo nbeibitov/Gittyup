@@ -122,6 +122,7 @@ test(NAME RepositoryWatcher)
 test(NAME RepoViewAutoRefresh)
 test(NAME PathFilter)
 test(NAME SpellChecker)
+test(NAME commitListStatus)
 
 # Test case not compatible with Windows
 if(NOT WIN32)
