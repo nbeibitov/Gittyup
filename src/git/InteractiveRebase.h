@@ -109,6 +109,10 @@ public:
   // Restore the branch and working tree to the state before the rebase.
   bool abort(QString *error = nullptr);
 
+  // Forget the rebase and keep HEAD and the working tree as they are (like
+  // 'git rebase --quit'). Autostashed changes stay in the stash list.
+  bool quit(QString *error = nullptr);
+
   // State of an ongoing rebase.
   QList<Step> steps() const;
   int stepCount() const;

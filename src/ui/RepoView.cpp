@@ -17,6 +17,7 @@
 #include "MainWindow.h"
 #include "MenuBar.h"
 #include "PathspecWidget.h"
+#include "RebaseBanner.h"
 #include "qtsupport.h"
 #include "ReferenceWidget.h"
 #include "RemoteCallbacks.h"
@@ -41,6 +42,7 @@
 #include "git/Config.h"
 #include "git/Index.h"
 #include "git/Rebase.h"
+#include "git/RebaseState.h"
 #include "git/RevWalk.h"
 #include "git/Signature.h"
 #include "git/TagRef.h"
@@ -430,7 +432,29 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
   connect(mLogView->model(), &QAbstractItemModel::dataChanged, this,
           &RepoView::startLogTimer);
 
-  addWidget(mDetailSplitter);
+  // Notice with the rebase actions above the main area.
+  mRebaseBanner = new RebaseBanner(repo, this);
+  connect(mRebaseBanner, &RebaseBanner::continueRequested, this,
+          &RepoView::continueRebase);
+  connect(mRebaseBanner, &RebaseBanner::abortRequested, this,
+          &RepoView::abortRebase);
+  connect(mRebaseBanner, &RebaseBanner::quitRequested, this,
+          &RepoView::quitRebase);
+  connect(notifier, &git::RepositoryNotifier::stateChanged, mRebaseBanner,
+          &RebaseBanner::updateState);
+  connect(notifier, &git::RepositoryNotifier::referenceUpdated, mRebaseBanner,
+          &RebaseBanner::updateState);
+  connect(mCommits, &CommitList::statusChanged, mRebaseBanner,
+          &RebaseBanner::updateState);
+
+  QWidget *main = new QWidget(this);
+  QVBoxLayout *mainLayout = new QVBoxLayout(main);
+  mainLayout->setContentsMargins(0, 0, 0, 0);
+  mainLayout->setSpacing(0);
+  mainLayout->addWidget(mRebaseBanner);
+  mainLayout->addWidget(mDetailSplitter, 1);
+
+  addWidget(main);
   addWidget(mLogView);
   setCollapsible(0, false);
   setStretchFactor(0, 1);
@@ -1433,6 +1457,13 @@ void RepoView::abortRebase() {
     return;
   }
 
+  if (git::RebaseState::read(mRepo).owner() ==
+      git::RebaseState::Owner::External) {
+    mRebase = nullptr;
+    runGitRebase("--abort");
+    return;
+  }
+
   mRepo.rebaseAbort();
   mRebase = nullptr;
   refresh(false);
@@ -1449,12 +1480,99 @@ void RepoView::continueRebase() {
     return;
   }
 
+  if (git::RebaseState::read(mRepo).owner() ==
+      git::RebaseState::Owner::External) {
+    runGitRebase("--continue");
+    return;
+  }
+
   if (!mRebase) {
     // Rebase operation was started externally so before going on with rebasing,
     // create a log entry
     mRebase = addLogEntry(tr(""), tr("Continue ongoing rebase"));
   }
   mRepo.rebaseContinue(mDetails->commitMessage());
+}
+
+void RepoView::quitRebase() {
+  if (git::InteractiveRebase::isInProgress(mRepo)) {
+    LogEntry *parent = mInteractiveRebase
+                           ? mInteractiveRebase
+                           : addLogEntry(tr("interactive rebase"), tr("Quit"));
+    QString error;
+    git::InteractiveRebase rebase(mRepo);
+    if (rebase.quit(&error))
+      parent->addEntry(tr("Rebase stopped, HEAD and the working tree are "
+                          "kept"),
+                       tr("Quit"));
+    if (!error.isEmpty())
+      parent->addEntry(LogEntry::Error, error);
+
+    mInteractiveRebase = nullptr;
+    mDetails->setCommitMessage(QString());
+    refresh(false);
+    return;
+  }
+
+  mRebase = nullptr;
+  runGitRebase("--quit");
+}
+
+void RepoView::runGitRebase(const QString &option) {
+  LogEntry *entry =
+      addLogEntry(QString("git rebase %1").arg(option), tr("Rebase"));
+
+  QString git = QStandardPaths::findExecutable("git");
+#ifdef Q_OS_WIN
+  if (git.isEmpty() && QFileInfo::exists("C:/Program Files/Git/cmd/git.exe"))
+    git = "C:/Program Files/Git/cmd/git.exe";
+#endif
+  if (git.isEmpty()) {
+    entry->addEntry(LogEntry::Error,
+                    tr("Git was not found on the PATH. It is needed for "
+                       "rebases started outside of Gittyup."));
+    return;
+  }
+
+  // Accept the default commit messages instead of opening an editor.
+  QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+  env.insert("GIT_EDITOR", "true");
+  env.insert("GIT_TERMINAL_PROMPT", "0");
+
+  QProcess *process = new QProcess(this);
+  process->setWorkingDirectory(mRepo.workdir().path());
+  process->setProcessEnvironment(env);
+  process->setProcessChannelMode(QProcess::MergedChannels);
+
+  mRebaseBanner->setBusy(true);
+  auto finish = [this, process, entry](bool ok) {
+    QString output = QString::fromUtf8(process->readAll()).trimmed();
+    if (!output.isEmpty())
+      entry->addEntry(ok ? LogEntry::Entry : LogEntry::Error,
+                      output.toHtmlEscaped().replace('\n', "<br>"));
+    if (ok)
+      entry->addEntry(tr("Done"), tr("Rebase"));
+
+    process->deleteLater();
+    mRebaseBanner->setBusy(false);
+    mDetails->setCommitMessage(QString());
+    emit mRepo.notifier()->stateChanged();
+    refresh(false);
+  };
+
+  connect(process, &QProcess::finished, this,
+          [finish](int code, QProcess::ExitStatus status) {
+            finish(status == QProcess::NormalExit && code == 0);
+          });
+  connect(process, &QProcess::errorOccurred, this,
+          [finish, entry](QProcess::ProcessError error) {
+            if (error != QProcess::FailedToStart)
+              return;
+            entry->addEntry(LogEntry::Error, tr("Unable to start git."));
+            finish(false);
+          });
+
+  process->start(git, {"rebase", option});
 }
 
 void RepoView::rebase(const git::AnnotatedCommit &upstream, LogEntry *parent) {

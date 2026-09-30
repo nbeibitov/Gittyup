@@ -521,6 +521,21 @@ bool InteractiveRebase::abort(QString *error) {
   return true;
 }
 
+bool InteractiveRebase::quit(QString *error) {
+  if (!isInProgress(mRepo)) {
+    if (error)
+      *error = tr("No interactive rebase in progress.");
+    return false;
+  }
+
+  removeCherryPickState(mRepo);
+  removeState();
+
+  emit mRepo.notifier()->referenceUpdated(mRepo.head());
+  emit mRepo.notifier()->stateChanged();
+  return true;
+}
+
 QList<InteractiveRebase::Step> InteractiveRebase::steps() const {
   State state;
   return load(state) ? state.steps : QList<Step>();

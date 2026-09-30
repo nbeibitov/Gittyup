@@ -39,6 +39,7 @@ class LogEntry;
 class LogView;
 class MainWindow;
 class PathspecWidget;
+class RebaseBanner;
 class ReferenceWidget;
 class RemoteCallbacks;
 class ToolBar;
@@ -213,6 +214,9 @@ public:
   // Continuouing the current ongoing rebase
   void continueRebase();
 
+  // Stop the ongoing rebase but keep HEAD and the working tree
+  void quitRebase();
+
   // interactive rebase of the commits after base
   void openInteractiveRebase(const git::Commit &base);
   void interactiveRebase(const git::Commit &base,
@@ -370,6 +374,8 @@ private slots:
                            const git::Commit after, int currIndex);
   void rebaseConflict(const git::Rebase rebase);
   void interactiveRebaseResult(const git::InteractiveRebase::Result &result);
+  // Run 'git rebase <option>' for rebases that Gittyup cannot handle itself.
+  void runGitRebase(const QString &option);
 
 signals:
   void statusChanged(bool dirty);
@@ -454,6 +460,7 @@ private:
    * Splits the history list and the detailview (diffView, TreeView)
    */
   QSplitter *mDetailSplitter;
+  RebaseBanner *mRebaseBanner;
   /*!
    * \brief mMaximized
    * Maximizes the widgets in the mDetailSplitter

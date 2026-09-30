@@ -31,6 +31,7 @@ add_library(
   MainWindow.cpp
   MenuBar.cpp
   PathspecWidget.cpp
+  RebaseBanner.cpp
   ProgressIndicator.cpp
   ReferenceList.cpp
   ReferenceView.cpp

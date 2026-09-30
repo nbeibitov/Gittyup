@@ -10,12 +10,15 @@
 #include "Test.h"
 #include "dialogs/InteractiveRebaseDialog.h"
 #include "git/Branch.h"
+#include "git/RebaseState.h"
 #include "git/Commit.h"
 #include "git/Index.h"
 #include "git/InteractiveRebase.h"
 #include "git/Reference.h"
 #include "git/Signature.h"
 #include "git/Tree.h"
+#include "ui/RebaseBanner.h"
+#include <QDir>
 #include <QFile>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -61,6 +64,8 @@ private slots:
   void dialogIncludeOlderCommit();
   void onto();
   void dialogOnto();
+  void stateOfGittyupRebase();
+  void stateOfExternalRebase();
 
 private:
   void writeFile(const QString &name, const QString &content);
@@ -683,6 +688,75 @@ void TestInteractiveRebase::dialogOnto() {
   QCOMPARE(dialog->steps().size(), 2);
 
   delete dialog;
+}
+
+void TestInteractiveRebase::stateOfGittyupRebase() {
+  createThreeCommits();
+  QVERIFY(!RebaseState::read(mRepo).isValid());
+
+  InteractiveRebase rebase(mRepo);
+  auto result = rebase.start(
+      mBase,
+      {step(Action::Pick, mA), step(Action::Edit, mB), step(Action::Pick, mC)},
+      {});
+  VERIFY_STATUS(result, Status::Edit);
+
+  RebaseState state = RebaseState::read(mRepo);
+  QVERIFY(state.owner() == RebaseState::Owner::Gittyup);
+  QCOMPARE(state.branch(), mBranch.mid(QString("refs/heads/").length()));
+  QCOMPARE(state.onto(), mBase.id());
+  QCOMPARE(state.done(), 2);
+  QCOMPARE(state.total(), 3);
+
+  // Quit keeps HEAD where the rebase stopped and forgets the rebase.
+  QString error;
+  QVERIFY2(rebase.quit(&error), qPrintable(error));
+  QVERIFY(!InteractiveRebase::isInProgress(mRepo));
+  QVERIFY(!RebaseState::read(mRepo).isValid());
+  QCOMPARE(mRepo.state(), GIT_REPOSITORY_STATE_NONE);
+  QCOMPARE(Commit(mRepo.head().target()).id(), mB.id());
+  QCOMPARE(mRepo.lookupRef(mBranch).target().id(), mC.id());
+}
+
+void TestInteractiveRebase::stateOfExternalRebase() {
+  createThreeCommits();
+
+  // State files as written by 'git rebase -i' before the first step.
+  QDir dir(mRepo.dir().filePath("rebase-merge"));
+  QVERIFY(dir.mkpath("."));
+  auto write = [&dir](const QString &name, const QByteArray &content) {
+    QFile file(dir.filePath(name));
+    QVERIFY(file.open(QFile::WriteOnly));
+    file.write(content);
+  };
+  write("head-name", mBranch.toUtf8() + "\n");
+  write("onto", mBase.id().toString().toUtf8() + "\n");
+  write("orig-head", mC.id().toString().toUtf8() + "\n");
+  write("interactive", "");
+  write("onto_name", "refs/heads/other\n");
+  QVERIFY(mRepo.createBranch("other", mBase).isValid());
+  write("done", "pick " + mA.id().toString().toUtf8() + " A\n");
+  write("git-rebase-todo", "pick " + mB.id().toString().toUtf8() +
+                               " B\npick " + mC.id().toString().toUtf8() +
+                               " C\n\n# Rebase comment\n");
+
+  RebaseState state = RebaseState::read(mRepo);
+  QVERIFY(state.owner() == RebaseState::Owner::External);
+  QCOMPARE(state.done(), 1);
+  QCOMPARE(state.total(), 3);
+  QCOMPARE(state.onto(), mBase.id());
+
+  RebaseBanner banner(mRepo);
+  QVERIFY(!banner.isHidden());
+  QString branch = mBranch.mid(QString("refs/heads/").length());
+  QVERIFY2(banner.text().contains(branch), qPrintable(banner.text()));
+  QVERIFY2(banner.text().contains("<b>other</b>"), qPrintable(banner.text()));
+  QVERIFY2(banner.text().contains("1") && banner.text().contains("3"),
+           qPrintable(banner.text()));
+
+  QVERIFY(dir.removeRecursively());
+  banner.updateState();
+  QVERIFY(banner.isHidden());
 }
 
 TEST_MAIN(TestInteractiveRebase)
