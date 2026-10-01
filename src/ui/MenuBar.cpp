@@ -523,8 +523,7 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
   mToggleLog = viewMenu->addAction(tr("Show Log"));
   toggleLogHotkey.use(mToggleLog);
   connect(mToggleLog, &QAction::triggered, [this] {
-    RepoView *view = this->view();
-    view->setLogVisible(!view->isLogVisible());
+    this->view()->toggleLog();
   });
 
   mToggleMaximize = new StateAction(tr("Normal"), tr("Maximize"), viewMenu);

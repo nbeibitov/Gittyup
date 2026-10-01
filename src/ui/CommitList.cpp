@@ -32,10 +32,12 @@
 #include "ui/HotkeyManager.h"
 #include <QAbstractListModel>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QSet>
+#include <atomic>
 #include <QPushButton>
 #include <QStyledItemDelegate>
 #include <QTextLayout>
@@ -68,12 +70,18 @@ class DiffCallbacks : public git::Diff::Callbacks {
 public:
   void setCanceled(bool canceled) { mCanceled = canceled; }
 
+  // Number of files examined so far. Read on the GUI thread.
+  int files() const { return mFiles; }
+  void reset() { mFiles = 0; }
+
   bool progress(const QString &oldPath, const QString &newPath) override {
+    ++mFiles;
     return !mCanceled;
   }
 
 private:
-  bool mCanceled = false;
+  std::atomic<bool> mCanceled = false;
+  std::atomic<int> mFiles = 0;
 };
 
 /*!
@@ -91,11 +99,25 @@ public:
       ++mProgress;
       QModelIndex idx = index(0, 0);
       emit dataChanged(idx, idx, {Qt::DisplayRole});
+
+      // Report the progress of slow status checks about once a second.
+      qint64 msecs = mStatusTime.elapsed();
+      if (msecs - mStatusReported >= 1000) {
+        mStatusReported = msecs;
+        emit statusProgress(mStatusCallbacks.files(), mStatusTotal, msecs);
+      }
     });
 
     // Connect watcher to signal when the status diff finishes.
     connect(&mStatus, &QFutureWatcher<git::Diff>::finished, [this] {
       mTimer.stop();
+      if (mStatus.isFinished() && mStatus.future().resultCount()) {
+        git::Diff diff = status();
+        emit statusChecked(diff.isValid() ? diff.count() : 0,
+                           mStatusCallbacks.files(), mStatusTime.elapsed());
+      }
+      mStatusTime.invalidate();
+
       // A change in the working directory only affects the status row.
       // Rebuilding the walker means walking the whole history again.
       if (mResetAfterStatus || !updateStatusRow())
@@ -151,7 +173,15 @@ public:
 
     // Reload the index before starting the status thread. Allowing
     // it to reload on the thread frequently corrupts the index.
-    mRepo.index().read();
+    git::Index index = mRepo.index();
+    index.read();
+
+    // A canceled check is continued by this one as far as progress goes.
+    if (!mStatusTime.isValid())
+      mStatusTime.start();
+    mStatusReported = 0;
+    mStatusTotal = index.count();
+    mStatusCallbacks.reset();
 
     // Check for uncommitted changes asynchronously.
     emit loadingChanged(true);
@@ -337,6 +367,10 @@ signals:
   void statusFinished(bool visible);
   // The status row was updated in place without resetting the model.
   void statusRowUpdated();
+
+  // Progress of the running status check, and its result.
+  void statusProgress(int files, int total, qint64 msecs);
+  void statusChecked(int changes, int files, qint64 msecs);
   void loadingChanged(bool loading);
 
 private:
@@ -712,6 +746,11 @@ private:
 
   QTimer mTimer;
   int mProgress = 0;
+
+  // Duration and size of the running status check.
+  QElapsedTimer mStatusTime;
+  qint64 mStatusReported = 0;
+  int mStatusTotal = 0;
 
   DiffCallbacks mStatusCallbacks;
   QFutureWatcher<git::Diff> mStatus;
@@ -1398,6 +1437,10 @@ CommitList::CommitList(Index *index, QWidget *parent)
   });
 
   connect(model, &CommitModel::loadingChanged, this, &CommitList::setLoading);
+  connect(model, &CommitModel::statusProgress, this,
+          &CommitList::statusProgress);
+  connect(model, &CommitModel::statusChecked, this,
+          &CommitList::statusChecked);
 
   git::RepositoryNotifier *notifier = repo.notifier();
   connect(notifier, &git::RepositoryNotifier::referenceUpdated,

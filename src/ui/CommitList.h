@@ -81,6 +81,11 @@ signals:
   // Emitted whenever isLoading() changes.
   void loadingChanged(bool loading);
 
+  // Progress of the running status check (about once a second), and its
+  // result. Files counts the examined files, total the tracked files.
+  void statusProgress(int files, int total, qint64 msecs);
+  void statusChecked(int changes, int files, qint64 msecs);
+
 protected:
   void contextMenuEvent(QContextMenuEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;

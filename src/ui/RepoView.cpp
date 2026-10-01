@@ -59,6 +59,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QLocale>
 #include <QMessageBox>
 #include <QtNetwork>
 #include <QPushButton>
@@ -78,6 +79,17 @@
 namespace {
 
 const QString kSplitterKey = "reposplitter";
+const QString kLogVisibleKey = "log/visible";
+
+// Status checks that take longer than this are shown in the log.
+const qint64 kSlowStatus = 3000;
+
+QString duration(qint64 msecs) {
+  qint64 secs = msecs / 1000;
+  if (secs < 60)
+    return RepoView::tr("%1 s").arg(secs);
+  return RepoView::tr("%1 min %2 s").arg(secs / 60).arg(secs % 60);
+}
 const QString kMsgFmt = "%1 - <span style='color: gray'>%2</span>";
 
 QString msg(const git::Commit &commit) {
@@ -411,8 +423,49 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
 
   QShortcut *esc = new QShortcut(tr("Esc"), mLogView);
   esc->setContext(Qt::WidgetWithChildrenShortcut);
-  connect(esc, &QShortcut::activated, mLogView,
-          [this] { setLogVisible(false); });
+  connect(esc, &QShortcut::activated, mLogView, [this] {
+    if (isLogVisible())
+      toggleLog();
+  });
+
+  // Show slow status checks in the log, so it's clear what takes so long.
+  connect(mCommits, &CommitList::statusProgress, this,
+          [this](int files, int total, qint64 msecs) {
+            if (msecs < kSlowStatus)
+              return;
+
+            QString text =
+                tr("checking for uncommitted changes: %1 of about %2 files, "
+                   "%3")
+                    .arg(QLocale().toString(files), QLocale().toString(total),
+                         duration(msecs));
+            if (!mStatusEntry)
+              mStatusEntry = addLogEntry(text, tr("Status"));
+            else
+              mStatusEntry->setText(text);
+          });
+  connect(mCommits, &CommitList::statusChecked, this,
+          [this](int changes, int files, qint64 msecs) {
+            if (!mStatusEntry && msecs < kSlowStatus)
+              return;
+
+            QString text = tr("%1 changed file(s), %2 files checked in %3")
+                               .arg(QLocale().toString(changes),
+                                    QLocale().toString(files), duration(msecs));
+            if (!mStatusEntry)
+              mStatusEntry = addLogEntry(text, tr("Status"));
+            else
+              mStatusEntry->setText(text);
+
+            // Explain the usual cause of slow checks.
+            if (msecs >= 10 * kSlowStatus)
+              mStatusEntry->addEntry(
+                  LogEntry::Hint,
+                  tr("Files whose size or modification time differ from the "
+                     "index are read completely. Running 'git status' once "
+                     "updates the index and makes later checks fast."));
+            mStatusEntry = nullptr;
+          });
 
   connect(notifier, &git::RepositoryNotifier::indexStageError, this,
           [this] { error(mLogRoot, tr("stage")); });
@@ -461,8 +514,16 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
   setStretchFactor(0, 1);
   setSizes({1, 0});
 
-  connect(this, &QSplitter::splitterMoved,
-          [this] { mIsLogVisible = (sizes().last() > 0); });
+  connect(this, &QSplitter::splitterMoved, [this] {
+    mIsLogVisible = (sizes().last() > 0);
+    QSettings().setValue(kLogVisibleKey, mIsLogVisible);
+  });
+
+  // Keep the log open if the user left it open.
+  if (QSettings().value(kLogVisibleKey, false).toBool()) {
+    mIsLogVisible = true;
+    setSizes({1, mLogView->sizeHint().height()});
+  }
 
   // Restore splitter state.
   mDetailSplitter->restoreState(QSettings().value(kSplitterKey).toByteArray());
@@ -474,6 +535,10 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
   // Use a new commit-graph once no history walk runs on another thread.
   // Reloading frees the old one, which such a walk might still read.
   connect(&mCommitGraph, &QFutureWatcher<bool>::finished, this, [this] {
+    if (mCommitGraph.result())
+      addLogEntry(tr("written in %1 for faster history walks")
+                      .arg(duration(mCommitGraphTime.elapsed())),
+                  tr("Commit-graph"));
     mReloadCommitGraph = mCommitGraph.result();
     if (mReloadCommitGraph && !isLoading()) {
       mReloadCommitGraph = false;
@@ -932,6 +997,15 @@ void RepoView::cancelIndexing() {
 }
 
 bool RepoView::isLogVisible() const { return mIsLogVisible; }
+
+void RepoView::toggleLog() {
+  bool visible = !isLogVisible();
+  QSettings().setValue(kLogVisibleKey, visible);
+
+  // An open log stays open until the user closes it.
+  suspendLogTimer();
+  setLogVisible(visible);
+}
 
 void RepoView::setLogVisible(bool visible) {
   if (visible == mIsLogVisible)
@@ -1532,6 +1606,7 @@ void RepoView::updateCommitGraph() {
     return;
 
   QString dir = mRepo.dir().path();
+  mCommitGraphTime.start();
   mCommitGraph.setFuture(QtConcurrent::run([dir] {
     QThread *thread = QThread::currentThread();
     QThread::Priority priority = thread->priority();
