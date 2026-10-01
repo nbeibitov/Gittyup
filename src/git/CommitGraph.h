@@ -11,6 +11,7 @@
 #define COMMITGRAPH_H
 
 #include "Repository.h"
+#include <QByteArray>
 #include <QString>
 
 namespace git {
@@ -32,6 +33,14 @@ public:
 
   // Make repo use a new commit-graph file and remove the replaced ones.
   static void reload(const Repository &repo);
+
+  // True if the commit-graph file has wrong generation numbers, as written
+  // by the libgit2 writer for histories with merges.
+  static bool isCorrupt(const QString &path);
+
+  // Recompute the generation numbers of commit-graph data and update its
+  // checksum. Returns false if the data can't be parsed.
+  static bool fixGenerations(QByteArray &data, bool *changed);
 
   static QString path(const Repository &repo);
 };

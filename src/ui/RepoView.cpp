@@ -1657,12 +1657,20 @@ void RepoView::refreshIndex() {
 }
 
 void RepoView::updateCommitGraph() {
-  if (mCommitGraph.isRunning() || !git::CommitGraph::isOutdated(mRepo))
+  if (mCommitGraph.isRunning() ||
+      !mRepo.gitConfig().value<bool>("core.commitGraph", true))
     return;
+
+  // Files of earlier versions may have wrong generation numbers.
+  bool outdated = git::CommitGraph::isOutdated(mRepo);
+  QString path = git::CommitGraph::path(mRepo);
 
   QString dir = mRepo.dir().path();
   mCommitGraphTime.start();
-  mCommitGraph.setFuture(QtConcurrent::run([dir] {
+  mCommitGraph.setFuture(QtConcurrent::run([dir, path, outdated] {
+    if (!outdated && !git::CommitGraph::isCorrupt(path))
+      return false;
+
     QThread *thread = QThread::currentThread();
     QThread::Priority priority = thread->priority();
     thread->setPriority(QThread::LowestPriority);
