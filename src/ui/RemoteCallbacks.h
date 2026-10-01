@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QSet>
+#include <atomic>
 
 class LogEntry;
 
@@ -101,7 +102,8 @@ private:
   QElapsedTimer mTimer;
   QString mSideband;
   size_t mBytesReceived = 0;
-  bool mCanceled = false;
+  // Set on the GUI thread, read on the transfer thread.
+  std::atomic<bool> mCanceled = false;
 
   LogEntry *mSidebandItem = nullptr;
   LogEntry *mTransferItem = nullptr;

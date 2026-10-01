@@ -280,6 +280,12 @@ bool RemoteCallbacks::connectToAgent() const {
 
 void RemoteCallbacks::credentialsImpl(const QString &url, QString &username,
                                       QString &password, QString &error) {
+  // Don't prompt for a transfer that was canceled in the meantime.
+  if (mCanceled) {
+    error = tr("canceled");
+    return;
+  }
+
   CredentialHelper *helper = CredentialHelper::instance();
   if (helper->get(url, username, password)) {
     QStringList key({url, username, password});
@@ -342,6 +348,11 @@ void RemoteCallbacks::interactiveAuthImpl(
     const QString &name, const QString &instruction,
     const QVector<git::Remote::SshInteractivePrompt> &prompts,
     QVector<QString> &responses, QString &error) {
+  if (mCanceled) {
+    error = tr("canceled");
+    return;
+  }
+
   QDialog dialog;
   dialog.setWindowTitle("SSH interactive authentication");
 

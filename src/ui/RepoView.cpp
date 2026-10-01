@@ -500,6 +500,18 @@ void RepoView::diffSelected(const git::Diff diff, const QString &file,
 }
 
 RepoView::~RepoView() {
+  // A view can be destroyed without being closed first (closeEvent cancels
+  // background tasks). A remote transfer still running uses mCallbacks,
+  // which is destroyed with this view.
+  if (mCallbacks && mWatcher && mWatcher->isRunning()) {
+    mCallbacks->setCanceled(true);
+    while (mWatcher->isRunning()) {
+      // Answer the blocking calls of the transfer thread. They fail now.
+      QCoreApplication::sendPostedEvents(mCallbacks, QEvent::MetaCall);
+      QThread::msleep(5);
+    }
+  }
+
   // Work around crash caused by clearing focus from the commit list
   // when it's destroyed. If it gets destroyed after the detail view
   // then the focus change may trigger the menu bar to query the mode
