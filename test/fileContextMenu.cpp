@@ -35,6 +35,16 @@ private slots:
 
 using namespace git;
 
+namespace {
+
+// Discarded files are checked out again, with CRLF line endings if
+// core.autocrlf is set (the default of Git for Windows).
+QByteArray content(QFile &file) {
+  return file.readAll().replace("\r\n", "\n");
+}
+
+} // namespace
+
 void TestFileContextMenu::testDiscardFile() {
   INIT_REPO("TestRepository.zip");
 
@@ -103,7 +113,7 @@ void TestFileContextMenu::testDiscardFile() {
       QFile file(repo.workdir().filePath(i.key()));
       QVERIFY(file.exists());
       QVERIFY(file.open(QFile::ReadOnly));
-      QVERIFY2(file.readAll() == i.value(), qPrintable(i.key()));
+      QCOMPARE(content(file), i.value().toUtf8());
     }
   }
 }
@@ -160,7 +170,15 @@ void TestFileContextMenu::testDiscardSubmodule() {
   QVERIFY(button->isEnabled());
   emit button->clicked(true);
 
-  QTest::qWait(10); // Wait until submodule discarded
+  // The submodule is reset asynchronously.
+  auto readme = [&repo] {
+    QFile file(repo.workdir().filePath("GittyupTestRepo/README.md"));
+    return file.open(QFile::ReadOnly) ? content(file) : QByteArray();
+  };
+  QTRY_COMPARE_WITH_TIMEOUT(readme(),
+                            QByteArray("# GittyupTestRepo\nTest repo for "
+                                       "Gittyup used in the unittests\n"),
+                            10000);
 
   // original text
   //  {"file.txt", "File.txt\n"},
@@ -181,7 +199,7 @@ void TestFileContextMenu::testDiscardSubmodule() {
       QFile file(repo.workdir().filePath(i.key()));
       QVERIFY(file.exists());
       QVERIFY(file.open(QFile::ReadOnly));
-      QVERIFY2(file.readAll() == i.value(), qPrintable(i.key()));
+      QCOMPARE(content(file), i.value().toUtf8());
     }
   }
 }
@@ -256,7 +274,7 @@ void TestFileContextMenu::testDiscardFolder() {
       QFile file(repo.workdir().filePath(i.key()));
       QVERIFY(file.exists());
       QVERIFY(file.open(QFile::ReadOnly));
-      QVERIFY2(file.readAll() == i.value(), qPrintable(i.key()));
+      QCOMPARE(content(file), i.value().toUtf8());
     }
   }
 }
@@ -322,7 +340,7 @@ void TestFileContextMenu::testDiscardNothing() {
       QFile file(repo.workdir().filePath(i.key()));
       QVERIFY(file.exists());
       QVERIFY(file.open(QFile::ReadOnly));
-      QVERIFY2(file.readAll() == i.value(), qPrintable(i.key()));
+      QCOMPARE(content(file), i.value().toUtf8());
     }
   }
 }
@@ -587,7 +605,7 @@ void TestFileContextMenu::testRemoveUntrackedFolder() {
       QFile file(repo.workdir().filePath(i.key()));
       QVERIFY(file.exists());
       QVERIFY(file.open(QFile::ReadOnly));
-      QVERIFY2(file.readAll() == i.value(), qPrintable(i.key()));
+      QCOMPARE(content(file), i.value().toUtf8());
     }
   }
 }
