@@ -892,8 +892,7 @@ ToolBar::ToolBar(MainWindow *parent) : QToolBar(parent) {
   mLogButton->setToolTip(tr("Show Log"));
   addWidget(mLogButton);
   connect(mLogButton, &Button::clicked, [this] {
-    RepoView *view = this->currentView();
-    view->setLogVisible(!view->isLogVisible());
+    currentView()->toggleLog();
   });
 
   SegmentedButton *mode = new SegmentedButton(this);

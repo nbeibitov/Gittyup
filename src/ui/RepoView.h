@@ -23,6 +23,7 @@
 #include "git/Rebase.h"
 #include "host/Account.h"
 #include <QFuture>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QProcess>
 #include <QSplitter>
@@ -145,6 +146,10 @@ public:
   // log window
   bool isLogVisible() const;
   void setLogVisible(bool visible);
+
+  // Show or hide the log on request of the user. The choice is kept for
+  // the next start and the log is no longer hidden automatically.
+  void toggleLog();
 
   /*!
    * \brief addLogEntry
@@ -452,6 +457,8 @@ private:
   RemoteCallbacks *mCallbacks = nullptr;
   QFutureWatcher<git::Result> *mWatcher = nullptr;
   QFutureWatcher<bool> mCommitGraph;
+  QElapsedTimer mCommitGraphTime;
+  LogEntry *mStatusEntry = nullptr;
   bool mReloadCommitGraph = false;
 
   QList<QWidget *> mTrackedWindows;

@@ -58,6 +58,10 @@ Index::Index(git_index *index) : d(index ? new Data(index) : nullptr) {}
 
 Index::operator git_index *() const { return isValid() ? d->index : nullptr; }
 
+int Index::count() const {
+  return isValid() ? static_cast<int>(git_index_entrycount(d->index)) : 0;
+}
+
 Index::Conflict Index::conflict(const QString &path) const {
   const git_index_entry *ancestor, *ours, *theirs;
   if (git_index_conflict_get(&ancestor, &ours, &theirs, d->index,

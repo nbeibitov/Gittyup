@@ -60,6 +60,9 @@ public:
 
   bool hasConflicts() const;
 
+  // Number of entries.
+  int count() const;
+
   static Index create();
 
 private:
