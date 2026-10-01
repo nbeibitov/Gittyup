@@ -18,6 +18,7 @@
 #include "git/Reference.h"
 #include "git/Remote.h"
 #include "git/Repository.h"
+#include "git/IndexRefresh.h"
 #include "git/Submodule.h"
 #include "git/InteractiveRebase.h"
 #include "git/Rebase.h"
@@ -26,6 +27,8 @@
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QProcess>
+#include <atomic>
+#include <memory>
 #include <QSplitter>
 #include <QTimer>
 #include <functional>
@@ -224,6 +227,9 @@ public:
 
   // Write the commit-graph in the background if it is missing or outdated
   void updateCommitGraph();
+
+  // Update the stat information of the index in the background
+  void refreshIndex();
 
   // interactive rebase of the commits after base
   void openInteractiveRebase(const git::Commit &base);
@@ -459,6 +465,10 @@ private:
   QFutureWatcher<bool> mCommitGraph;
   QElapsedTimer mCommitGraphTime;
   LogEntry *mStatusEntry = nullptr;
+  QFutureWatcher<git::IndexRefresh::Result> mIndexRefresh;
+  QElapsedTimer mIndexRefreshTime;
+  LogEntry *mIndexRefreshEntry = nullptr;
+  std::shared_ptr<std::atomic<bool>> mIndexRefreshCanceled;
   bool mReloadCommitGraph = false;
 
   QList<QWidget *> mTrackedWindows;

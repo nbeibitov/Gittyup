@@ -159,14 +159,15 @@ void TestCommitListStatus::slowStatusInLog() {
   QCOMPARE(root->entries().size(), count + 1);
   QVERIFY2(entry->text().contains("5 s"), qPrintable(entry->text()));
 
+  // A very slow check refreshes the stat information of the index.
   emit mCommits->statusChecked(3, 160000, 60000);
-  QCOMPARE(root->entries().size(), count + 1);
   QVERIFY2(entry->text().contains("1 min 0 s"), qPrintable(entry->text()));
-  QCOMPARE(entry->entries().size(), 1); // hint about the index
+  QCOMPARE(root->entries().size(), count + 2);
+  QCOMPARE(root->entries().last()->title(), QString("Index"));
 
   // The next slow check gets its own entry.
   emit mCommits->statusProgress(10, 100, 3500);
-  QCOMPARE(root->entries().size(), count + 2);
+  QCOMPARE(root->entries().size(), count + 3);
   emit mCommits->statusChecked(0, 100, 3600);
 }
 

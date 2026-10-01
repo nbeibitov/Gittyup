@@ -123,6 +123,7 @@ test(NAME PathFilter)
 test(NAME SpellChecker)
 test(NAME commitListStatus)
 test(NAME commitGraph)
+test(NAME indexRefresh)
 
 # Test case not compatible with Windows
 if(NOT WIN32)

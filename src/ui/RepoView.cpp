@@ -84,6 +84,11 @@ const QString kLogVisibleKey = "log/visible";
 // Status checks that take longer than this are shown in the log.
 const qint64 kSlowStatus = 3000;
 
+// Status checks that take longer than this refresh the index afterwards,
+// but not more often than every kIndexRefreshInterval.
+const qint64 kRefreshIndexStatus = 10000;
+const qint64 kIndexRefreshInterval = 10 * 60 * 1000;
+
 QString duration(qint64 msecs) {
   qint64 secs = msecs / 1000;
   if (secs < 60)
@@ -456,15 +461,32 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
               mStatusEntry = addLogEntry(text, tr("Status"));
             else
               mStatusEntry->setText(text);
-
-            // Explain the usual cause of slow checks.
-            if (msecs >= 10 * kSlowStatus)
-              mStatusEntry->addEntry(
-                  LogEntry::Hint,
-                  tr("Files whose size or modification time differ from the "
-                     "index are read completely. Running 'git status' once "
-                     "updates the index and makes later checks fast."));
             mStatusEntry = nullptr;
+
+            // Usually the index has out of date stat information.
+            if (msecs >= kRefreshIndexStatus)
+              refreshIndex();
+          });
+
+  connect(&mIndexRefresh,
+          &QFutureWatcher<git::IndexRefresh::Result>::finished, this, [this] {
+            git::IndexRefresh::Result result = mIndexRefresh.result();
+            QString time = duration(mIndexRefreshTime.elapsed());
+            LogEntry *entry = mIndexRefreshEntry;
+            mIndexRefreshEntry = nullptr;
+            mIndexRefreshTime.start(); // for the interval
+
+            if (result.written) {
+              entry->setText(tr("file information of %1 files updated in %2, "
+                                "status checks are fast again")
+                                 .arg(QLocale().toString(result.hashed), time));
+            } else if (result.error.isEmpty()) {
+              entry->setText(tr("already up to date (%1 files read in %2)")
+                                 .arg(QLocale().toString(result.hashed), time));
+            } else {
+              entry->setText(tr("not updated"));
+              entry->addEntry(LogEntry::Warning, result.error);
+            }
           });
 
   connect(notifier, &git::RepositoryNotifier::indexStageError, this,
@@ -565,6 +587,10 @@ void RepoView::diffSelected(const git::Diff diff, const QString &file,
 }
 
 RepoView::~RepoView() {
+  // Don't keep the application running for a refresh of the index.
+  if (mIndexRefreshCanceled)
+    *mIndexRefreshCanceled = true;
+
   // A view can be destroyed without being closed first (closeEvent cancels
   // background tasks). A remote transfer still running uses mCallbacks,
   // which is destroyed with this view.
@@ -1599,6 +1625,35 @@ void RepoView::continueRebase() {
     mRebase = addLogEntry(tr(""), tr("Continue ongoing rebase"));
   }
   mRepo.rebaseContinue(mDetails->commitMessage());
+}
+
+void RepoView::refreshIndex() {
+  if (mIndexRefresh.isRunning() || mRepo.isBare())
+    return;
+  if (mIndexRefreshTime.isValid() &&
+      mIndexRefreshTime.elapsed() < kIndexRefreshInterval)
+    return;
+
+  mIndexRefreshEntry =
+      addLogEntry(tr("updating the file information, which makes the next "
+                     "status checks fast"),
+                  tr("Index"));
+  mIndexRefreshTime.start();
+
+  // Shared with the thread, which may outlive this view.
+  auto canceled = std::make_shared<std::atomic<bool>>(false);
+  mIndexRefreshCanceled = canceled;
+
+  QString dir = mRepo.dir().path();
+  mIndexRefresh.setFuture(QtConcurrent::run([dir, canceled] {
+    QThread *thread = QThread::currentThread();
+    QThread::Priority priority = thread->priority();
+    thread->setPriority(QThread::LowestPriority);
+    git::IndexRefresh::Result result =
+        git::IndexRefresh::run(dir, canceled.get());
+    thread->setPriority(priority);
+    return result;
+  }));
 }
 
 void RepoView::updateCommitGraph() {

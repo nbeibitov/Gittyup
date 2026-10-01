@@ -13,6 +13,7 @@ add_library(
   FilterList.cpp
   Id.cpp
   Index.cpp
+  IndexRefresh.cpp
   InteractiveRebase.cpp
   Object.cpp
   Patch.cpp
