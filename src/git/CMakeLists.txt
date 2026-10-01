@@ -14,6 +14,7 @@ add_library(
   Hunk.cpp
   Id.cpp
   Index.cpp
+  IndexRefresh.cpp
   InteractiveRebase.cpp
   Object.cpp
   Patch.cpp
