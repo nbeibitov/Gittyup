@@ -11,11 +11,13 @@
 #include "Config.h"
 #include "git2.h"
 #include "git2/sys/commit_graph.h"
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <memory>
+#include <vector>
 
 namespace git {
 
@@ -59,7 +61,186 @@ qint64 modified(const QString &path) {
   return info.exists() ? info.lastModified().toSecsSinceEpoch() : 0;
 }
 
+quint32 readBE32(const QByteArray &data, qint64 pos) {
+  const uchar *p = reinterpret_cast<const uchar *>(data.constData()) + pos;
+  return (quint32(p[0]) << 24) | (quint32(p[1]) << 16) | (quint32(p[2]) << 8) |
+         quint32(p[3]);
+}
+
+void writeBE32(QByteArray &data, qint64 pos, quint32 value) {
+  uchar *p = reinterpret_cast<uchar *>(data.data()) + pos;
+  p[0] = uchar(value >> 24);
+  p[1] = uchar(value >> 16);
+  p[2] = uchar(value >> 8);
+  p[3] = uchar(value);
+}
+
+// Commit-graph file format, see gitformat-commit-graph(5).
+const quint32 kSignature = 0x43475048; // "CGPH"
+const quint32 kChunkFanout = 0x4f494446; // "OIDF"
+const quint32 kChunkData = 0x43444154; // "CDAT"
+const quint32 kChunkEdges = 0x45444745; // "EDGE"
+const quint32 kParentNone = 0x70000000;
+const quint32 kParentEdge = 0x80000000;
+const quint32 kGenerationMax = 0x3fffffff;
+
 } // namespace
+
+// libgit2 computes the generation numbers (topological levels) with a
+// traversal that may visit a commit before all of its parents, which yields
+// generations lower than those of the parents. git then considers the file
+// corrupt, and walks that rely on them can stop too early. Compute them again
+// and fix the checksum. Returns false if the data can't be parsed.
+bool CommitGraph::fixGenerations(QByteArray &data, bool *changed) {
+  *changed = false;
+  qint64 size = data.size();
+  if (size < 8 || readBE32(data, 0) != kSignature || data.at(4) != 1)
+    return false;
+
+  int hashSize;
+  QCryptographicHash::Algorithm algorithm;
+  switch (data.at(5)) {
+    case 1:
+      hashSize = 20;
+      algorithm = QCryptographicHash::Sha1;
+      break;
+    case 2:
+      hashSize = 32;
+      algorithm = QCryptographicHash::Sha256;
+      break;
+    default:
+      return false;
+  }
+
+  // Only single files, not split chains.
+  int chunks = uchar(data.at(6));
+  if (data.at(7) != 0 || size < 8 + (chunks + 1) * 12 + hashSize)
+    return false;
+
+  qint64 fanout = -1, commits = -1, edges = -1;
+  for (int i = 0; i < chunks; ++i) {
+    qint64 entry = 8 + i * 12;
+    quint32 id = readBE32(data, entry);
+    qint64 offset =
+        (qint64(readBE32(data, entry + 4)) << 32) | readBE32(data, entry + 8);
+    if (offset < 0 || offset > size - hashSize)
+      return false;
+    if (id == kChunkFanout)
+      fanout = offset;
+    else if (id == kChunkData)
+      commits = offset;
+    else if (id == kChunkEdges)
+      edges = offset;
+  }
+
+  if (fanout < 0 || commits < 0 || fanout + 256 * 4 > size - hashSize)
+    return false;
+
+  qint64 count = readBE32(data, fanout + 255 * 4);
+  qint64 entrySize = hashSize + 16;
+  if (commits + count * entrySize > size - hashSize)
+    return false;
+
+  // Parents of each commit.
+  std::vector<std::vector<quint32>> parents(count);
+  for (qint64 i = 0; i < count; ++i) {
+    qint64 entry = commits + i * entrySize + hashSize;
+    quint32 first = readBE32(data, entry);
+    quint32 second = readBE32(data, entry + 4);
+    if (first != kParentNone)
+      parents[i].push_back(first);
+
+    if (second != kParentNone && !(second & kParentEdge)) {
+      parents[i].push_back(second);
+    } else if (second != kParentNone) {
+      // Octopus merge: the other parents are in the edge list.
+      if (edges < 0)
+        return false;
+      for (qint64 e = edges + qint64(second & ~kParentEdge) * 4;; e += 4) {
+        if (e + 4 > size - hashSize)
+          return false;
+        quint32 value = readBE32(data, e);
+        parents[i].push_back(value & ~kParentEdge);
+        if (value & kParentEdge)
+          break;
+      }
+    }
+
+    for (quint32 parent : parents[i]) {
+      if (parent >= count)
+        return false;
+    }
+  }
+
+  // Depth-first, a commit is finished once all its parents are finished.
+  enum State : uchar { New, Visiting, Done };
+  std::vector<State> states(count, New);
+  std::vector<quint32> generations(count, 0);
+  std::vector<quint32> stack;
+  for (qint64 start = 0; start < count; ++start) {
+    if (states[start] == Done)
+      continue;
+
+    stack.push_back(start);
+    while (!stack.empty()) {
+      quint32 i = stack.back();
+      if (states[i] == Done) {
+        stack.pop_back();
+        continue;
+      }
+
+      states[i] = Visiting;
+      bool ready = true;
+      for (quint32 parent : parents[i]) {
+        if (states[parent] == Visiting)
+          return false; // a cycle
+        if (states[parent] == New) {
+          stack.push_back(parent);
+          ready = false;
+        }
+      }
+
+      if (!ready)
+        continue;
+
+      quint32 generation = 0;
+      for (quint32 parent : parents[i])
+        generation = qMax(generation, generations[parent]);
+      generations[i] = qMin(generation + 1, kGenerationMax);
+      states[i] = Done;
+      stack.pop_back();
+    }
+  }
+
+  // The generation shares a word with the two high bits of the time.
+  for (qint64 i = 0; i < count; ++i) {
+    qint64 pos = commits + i * entrySize + hashSize + 8;
+    quint32 word = readBE32(data, pos);
+    quint32 fixed = (generations[i] << 2) | (word & 0x3);
+    if (fixed != word) {
+      writeBE32(data, pos, fixed);
+      *changed = true;
+    }
+  }
+
+  if (*changed) {
+    QByteArray hash = QCryptographicHash::hash(
+        QByteArrayView(data.constData(), size - hashSize), algorithm);
+    data.replace(size - hashSize, hashSize, hash);
+  }
+
+  return true;
+}
+
+bool CommitGraph::isCorrupt(const QString &path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly))
+    return false;
+
+  QByteArray data = file.readAll();
+  bool changed = false;
+  return fixGenerations(data, &changed) && changed;
+}
 
 QString CommitGraph::path(const Repository &repo) {
   QString info = infoDir(repo);
@@ -160,9 +341,14 @@ bool CommitGraph::write(const QString &gitDir, QString *error) {
   if (git_commit_graph_writer_dump(&buf, writer))
     return fail(lastError(QObject::tr("Unable to create the commit-graph.")));
 
-  qint64 size = static_cast<qint64>(buf.size);
-  bool written = (lock.write(buf.ptr, size) == size);
+  QByteArray data(buf.ptr, static_cast<qsizetype>(buf.size));
   git_buf_dispose(&buf);
+
+  bool changed = false;
+  if (!fixGenerations(data, &changed))
+    return fail(QObject::tr("Unable to check the commit-graph."));
+
+  bool written = (lock.write(data) == data.size());
   lock.close();
   if (!written || lock.error() != QFileDevice::NoError)
     return fail(QObject::tr("Unable to write the commit-graph."));
