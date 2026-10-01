@@ -249,10 +249,9 @@ void TestRebase::conflictingRebase() {
   QCOMPARE(rebaseFinished, 0);
   QCOMPARE(rebaseConflict, 1);
 
-  // Check that buttons are visible
-  QTest::qWait(100);
-  QCOMPARE(continueRebaseButton->isVisible(), true);
-  QCOMPARE(abortRebaseButton->isVisible(), true);
+  // Check that buttons are visible. The view is refreshed asynchronously.
+  QTRY_COMPARE_WITH_TIMEOUT(continueRebaseButton->isVisible(), true, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(abortRebaseButton->isVisible(), true, 10000);
 
   // Resolve conflicts
   diff = mRepo.status(mRepo.index(), nullptr, false);
@@ -271,11 +270,13 @@ void TestRebase::conflictingRebase() {
   QCOMPARE(rebaseConflict, 2); // User tries to continue without staging
   QCOMPARE(refreshTriggered, 1);
 
-  QTest::qWait(100); // Wait until refresh is done
+  // Wait until the refresh is done, the file widgets are created again.
+  QTRY_VERIFY_WITH_TIMEOUT(!repoView->isLoading(), 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(repoView->findChildren<FileWidget *>().length(), 1,
+                            10000);
 
   // Staging the file
   auto filewidgets = repoView->findChildren<FileWidget *>();
-  QCOMPARE(filewidgets.length(), 1);
   filewidgets.at(0)->stageStateChanged(filewidgets.at(0)->modelIndex(),
                                        git::Index::StagedState::Staged);
 
@@ -296,11 +297,12 @@ void TestRebase::conflictingRebase() {
   // Check that rebase was really finished
   QCOMPARE(mRepo.rebaseOngoing(), false);
 
-  QTest::qWait(100); // Wait until refresh finished
+  // Wait until the refresh is done.
+  QTRY_VERIFY_WITH_TIMEOUT(!repoView->isLoading(), 10000);
 
-  // Check that buttons are visible
-  QCOMPARE(continueRebaseButton->isVisible(), false);
-  QCOMPARE(abortRebaseButton->isVisible(), false);
+  // Check that buttons are hidden
+  QTRY_COMPARE_WITH_TIMEOUT(continueRebaseButton->isVisible(), false, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(abortRebaseButton->isVisible(), false, 10000);
 
   // Check call counters
   QCOMPARE(rebaseFinished, 1);
@@ -359,11 +361,13 @@ void TestRebase::conflictingRebaseCustomMessage() {
 
   repoView->continueRebase(); // should fail
 
-  QTest::qWait(100); // Wait until refresh is done
+  // Wait until the refresh is done, the file widgets are created again.
+  QTRY_VERIFY_WITH_TIMEOUT(!repoView->isLoading(), 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(repoView->findChildren<FileWidget *>().length(), 1,
+                            10000);
 
   // Staging the file
   auto filewidgets = repoView->findChildren<FileWidget *>();
-  QCOMPARE(filewidgets.length(), 1);
   filewidgets.at(0)->stageStateChanged(filewidgets.at(0)->modelIndex(),
                                        git::Index::StagedState::Staged);
 
@@ -385,11 +389,12 @@ void TestRebase::conflictingRebaseCustomMessage() {
   // Check that rebase was really finished
   QCOMPARE(mRepo.rebaseOngoing(), false);
 
-  QTest::qWait(100); // Wait until refresh finished
+  // Wait until the refresh is done.
+  QTRY_VERIFY_WITH_TIMEOUT(!repoView->isLoading(), 10000);
 
-  // Check that buttons are visible
-  QCOMPARE(continueRebaseButton->isVisible(), false);
-  QCOMPARE(abortRebaseButton->isVisible(), false);
+  // Check that buttons are hidden
+  QTRY_COMPARE_WITH_TIMEOUT(continueRebaseButton->isVisible(), false, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(abortRebaseButton->isVisible(), false, 10000);
 }
 
 void TestRebase::continueExternalStartedRebase() {
@@ -755,10 +760,9 @@ void TestRebase::abortMR() {
   QCOMPARE(rebaseFinished, 0);
   QCOMPARE(rebaseConflict, 1);
 
-  // Check that buttons are visible
-  QTest::qWait(100);
-  QCOMPARE(continueRebaseButton->isVisible(), true);
-  QCOMPARE(abortRebaseButton->isVisible(), true);
+  // Check that buttons are visible. The view is refreshed asynchronously.
+  QTRY_COMPARE_WITH_TIMEOUT(continueRebaseButton->isVisible(), true, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(abortRebaseButton->isVisible(), true, 10000);
 
   refreshTriggered = 0;
   rebaseConflict = 0;
@@ -863,10 +867,9 @@ void TestRebase::commitDuringRebase() {
   QCOMPARE(rebaseFinished, 0);
   QCOMPARE(rebaseConflict, 1);
 
-  // Check that buttons are visible
-  QTest::qWait(100);
-  QCOMPARE(continueRebaseButton->isVisible(), true);
-  QCOMPARE(abortRebaseButton->isVisible(), true);
+  // Check that buttons are visible. The view is refreshed asynchronously.
+  QTRY_COMPARE_WITH_TIMEOUT(continueRebaseButton->isVisible(), true, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(abortRebaseButton->isVisible(), true, 10000);
 
   // Resolve conflicts
   diff = mRepo.status(mRepo.index(), nullptr, false);
@@ -913,11 +916,12 @@ void TestRebase::commitDuringRebase() {
   // Check that rebase was really finished
   QCOMPARE(mRepo.rebaseOngoing(), false);
 
-  QTest::qWait(10); // Wait until refresh is finished
+  // Wait until the refresh is done.
+  QTRY_VERIFY_WITH_TIMEOUT(!repoView->isLoading(), 10000);
 
-  // Check that buttons are visible
-  QCOMPARE(continueRebaseButton->isVisible(), false);
-  QCOMPARE(abortRebaseButton->isVisible(), false);
+  // Check that buttons are hidden
+  QTRY_COMPARE_WITH_TIMEOUT(continueRebaseButton->isVisible(), false, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(abortRebaseButton->isVisible(), false, 10000);
 
   // Check call counters
   QCOMPARE(rebaseFinished, 1);
