@@ -1,0 +1,3 @@
+# configure_file() writes LICENSE.md with LF line endings. Check it out the
+# same way, otherwise every configure marks it as modified on Windows.
+LICENSE.md text eol=lf
