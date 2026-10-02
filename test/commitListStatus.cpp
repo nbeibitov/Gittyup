@@ -14,6 +14,8 @@
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
 #include "log/LogEntry.h"
+#include "ui/ReferenceView.h"
+#include "ui/ReferenceWidget.h"
 #include "ui/TreeView.h"
 #include <QSignalSpy>
 
@@ -32,6 +34,7 @@ private slots:
   void slowStatusInLog();
   void secondWindowOfRepository();
   void externalChanges();
+  void stashesTab();
   void cleanupTestCase();
 
 private:
@@ -219,6 +222,40 @@ void TestCommitListStatus::externalChanges() {
   mView->checkExternalChanges();
   QTRY_VERIFY_WITH_TIMEOUT(resets.count() > 0, 10000);
   QTRY_COMPARE_WITH_TIMEOUT(mCommits->model()->rowCount(), rows + 1, 10000);
+}
+
+void TestCommitListStatus::stashesTab() {
+  writeFile("a.txt", "first stash\n");
+  QVERIFY(mRepo->stash("first").isValid());
+  writeFile("a.txt", "second stash\n");
+  QVERIFY(mRepo->stash("second").isValid());
+  QList<git::Commit> stashes = mRepo->stashes();
+  QCOMPARE(stashes.size(), 2);
+
+  // The reference selector has a tab with each stash, newest first.
+  auto refs = mView->findChild<ReferenceWidget *>();
+  QVERIFY(refs);
+  auto view = refs->findChild<ReferenceView *>();
+  QVERIFY(view);
+  QAbstractItemModel *model = view->model();
+  QModelIndex tab;
+  for (int i = 0; i < model->rowCount(); ++i) {
+    if (model->index(i, 0).data().toString() == "Stashes")
+      tab = model->index(i, 0);
+  }
+  QVERIFY(tab.isValid());
+  QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(tab), 2, 10000);
+  QModelIndex second = model->index(1, 0, tab);
+  QVERIFY2(second.data().toString().startsWith("stash@{1}: "),
+           qPrintable(second.data().toString()));
+  QCOMPARE(second.data(ReferenceView::StashIndexRole).toInt(), 1);
+
+  // Choosing it (pressing makes it current, releasing clicks) shows the
+  // stashes in the commit list and selects it.
+  view->setCurrentIndex(second);
+  emit view->clicked(second);
+  QTRY_COMPARE_WITH_TIMEOUT(mView->commits().size(), 1, 10000);
+  QCOMPARE(mView->commits().first().id(), stashes.at(1).id());
 }
 
 void TestCommitListStatus::cleanupTestCase() {

@@ -32,6 +32,9 @@ signals:
   void referenceChanged(const git::Reference &ref);
   void referenceSelected(const git::Reference &ref);
 
+  // A stash of the Stashes tab was chosen (stash@{index}).
+  void stashSelected(int index);
+
 private:
   void updateLabel(const git::Reference &ref);
 

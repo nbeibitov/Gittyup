@@ -260,7 +260,8 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
   headerLayout->addWidget(commitToolBar);
 
   // Create reference list.
-  mRefs = new ReferenceWidget(repo, ReferenceView::AllRefs, header);
+  mRefs = new ReferenceWidget(
+      repo, ReferenceView::AllRefs | ReferenceView::StashList, header);
   headerLayout->addWidget(mRefs);
 
   connect(mRefs, &ReferenceWidget::referenceChanged, menuBar,
@@ -292,6 +293,13 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
           &CommitList::setReference);
   connect(mRefs, &ReferenceWidget::referenceSelected, mCommits,
           &CommitList::selectReference);
+
+  // The commit list shows the stashes now, select the chosen one.
+  connect(mRefs, &ReferenceWidget::stashSelected, this, [this](int index) {
+    QList<git::Commit> stashes = mRepo.stashes();
+    if (index >= 0 && index < stashes.size())
+      mCommits->selectRange(stashes.at(index).id().toString());
+  });
   connect(mCommits, &CommitList::statusChanged, this, &RepoView::statusChanged);
   connect(mCommits, &CommitList::loadingChanged, this,
           &RepoView::loadingChanged);

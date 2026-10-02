@@ -31,7 +31,18 @@ QModelIndex findReference(QAbstractItemModel *model,
   QModelIndexList indexes = model->match(
       model->index(0, 0), Qt::DisplayRole, ref.name(), 1,
       Qt::MatchFixedString | Qt::MatchCaseSensitive | Qt::MatchRecursive);
-  return !indexes.isEmpty() ? indexes.first() : QModelIndex();
+  if (!indexes.isEmpty())
+    return indexes.first();
+
+  // The Stashes tab shows each stash instead of the reference.
+  if (ref.isStash()) {
+    indexes = model->match(model->index(0, 0), ReferenceView::StashIndexRole,
+                           0, 1, Qt::MatchExactly | Qt::MatchRecursive);
+    if (!indexes.isEmpty())
+      return indexes.first();
+  }
+
+  return QModelIndex();
 }
 
 class Label : public QLabel {
@@ -153,12 +164,21 @@ ReferenceWidget::ReferenceWidget(const git::Repository &repo,
       return;
 
     emit referenceChanged(currentReference());
+
+    QVariant stash = mView->currentIndex().data(ReferenceView::StashIndexRole);
+    if (stash.isValid())
+      emit stashSelected(stash.toInt());
+
     if (mView->isVisible())
       mView->setFocus();
   });
 
   connect(mView, &ReferenceView::clicked, [this](const QModelIndex &index) {
     emit referenceSelected(index.data(Qt::UserRole).value<git::Reference>());
+
+    QVariant stash = index.data(ReferenceView::StashIndexRole);
+    if (stash.isValid())
+      emit stashSelected(stash.toInt());
   });
 
   // Handle model reset.

@@ -23,13 +23,16 @@ public:
     COMBOBOX_HEADER = 0,
     Branches = 1,
     Remotes = 2,
-    Tags = 3
+    Tags = 3,
+    Stashes = 4
   };
 
   struct ReferenceList {
     QString name;
     QList<git::Reference> refs;
     ReferenceType type;
+    QStringList labels; // shown instead of the reference names
+    QStringList toolTips;
   };
 
   ReferenceModel(const git::Repository &repo, ReferenceView::Kinds kinds,
@@ -52,6 +55,8 @@ public:
                       int role = Qt::DisplayRole) const override;
 
 private:
+  QList<ReferenceType> sectionTypes() const;
+
   git::Repository mRepo;
   ReferenceView::Kinds mKinds;
   QList<ReferenceList> mRefs;
