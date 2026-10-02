@@ -32,8 +32,12 @@ public:
     Tags = 0x10,
     Stash = 0x20,
     ExcludeHead = 0x40,
+    StashList = 0x80, // a Stashes tab with each stash instead of Stash
     AllRefs = DetachedHead | LocalBranches | RemoteBranches | Tags | Stash
   };
+
+  // Index of a stash in the Stashes tab (stash@{index}).
+  static const int StashIndexRole = Qt::UserRole + 1;
 
   Q_DECLARE_FLAGS(Kinds, Kind);
 

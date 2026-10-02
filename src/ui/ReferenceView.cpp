@@ -184,7 +184,7 @@ ReferenceView::ReferenceView(const git::Repository &repo, Kinds kinds,
 
               git::Reference ref =
                   index.data(Qt::UserRole).value<git::Reference>();
-              if (ref.isValid() && !ref.isHead())
+              if (ref.isValid() && !ref.isHead() && !ref.isStash())
                 checkout(ref);
             });
   }
@@ -281,6 +281,19 @@ void ReferenceView::contextMenuEvent(QContextMenuEvent *event) {
   git::Reference ref = index.data(Qt::UserRole).value<git::Reference>();
   if (!ref.isValid())
     return;
+
+  // Actions of a single stash.
+  QVariant stashIndex = index.data(StashIndexRole);
+  if (stashIndex.isValid()) {
+    int i = stashIndex.toInt();
+    RepoView *view = RepoView::parentView(this);
+    QMenu menu;
+    menu.addAction(tr("Apply"), [view, i] { view->applyStash(i); });
+    menu.addAction(tr("Pop"), [view, i] { view->popStash(i); });
+    menu.addAction(tr("Drop"), [view, i] { view->dropStash(i); });
+    menu.exec(event->globalPos());
+    return;
+  }
 
   QMenu menu;
   QAction *checkout =

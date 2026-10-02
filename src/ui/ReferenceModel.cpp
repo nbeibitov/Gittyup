@@ -3,9 +3,11 @@
 #include "git/Signature.h"
 #include "git/Tag.h"
 #include "git/Branch.h"
+#include "git/Commit.h"
 #include "git/TagRef.h"
 
 #include <QDateTime>
+#include <QLocale>
 
 namespace {
 const QString kNowrapFmt = "<span style='white-space: nowrap'>%1</span>";
@@ -32,34 +34,27 @@ ReferenceModel::ReferenceModel(const git::Repository &repo,
   }
 }
 
-int ReferenceModel::referenceTypeToIndex(ReferenceType t) const {
-  int index = t;
-  // No local branches header exists, so the index must be lowered
-  if (!(mKinds & ReferenceView::Kind::LocalBranches)) {
-    index--;
-  }
+QList<ReferenceModel::ReferenceType> ReferenceModel::sectionTypes() const {
+  // The sections in the order of update(), derived from the kinds.
+  QList<ReferenceType> types;
+  if (mKinds & ReferenceView::LocalBranches)
+    types.append(ReferenceType::Branches);
+  if (mKinds & ReferenceView::RemoteBranches)
+    types.append(ReferenceType::Remotes);
+  if (mKinds & ReferenceView::Tags)
+    types.append(ReferenceType::Tags);
+  if (mKinds & ReferenceView::StashList)
+    types.append(ReferenceType::Stashes);
+  return types;
+}
 
-  // No remote branches header exists, so the index must be lowered
-  if (t != ReferenceType::Branches &&
-      !(mKinds & ReferenceView::Kind::RemoteBranches)) {
-    index--;
-  }
-  return index - 1;
+int ReferenceModel::referenceTypeToIndex(ReferenceType t) const {
+  return sectionTypes().indexOf(t);
 }
 
 int ReferenceModel::indexToReferenceType(int index) const {
-  int type = index + 1;
-  // No local branches header exists, so the index must be lowered
-  if (!(mKinds & ReferenceView::Kind::LocalBranches)) {
-    type++;
-  }
-
-  // No remote branches header exists, so the index must be lowered
-  if (type != ReferenceType::Branches &&
-      !(mKinds & ReferenceView::Kind::RemoteBranches)) {
-    type++;
-  }
-  return static_cast<ReferenceType>(type);
+  QList<ReferenceType> types = sectionTypes();
+  return (index >= 0 && index < types.size()) ? types.at(index) : index + 1;
 }
 
 void ReferenceModel::setCommit(const git::Commit &commit) {
@@ -108,7 +103,8 @@ void ReferenceModel::update() {
         !mCommit.isValid() ||
         (mRepo.stashRef().isValid() &&
          mRepo.stashRef().annotatedCommit().commit() == mCommit);
-    if ((mKinds & ReferenceView::Stash) && stashOnCommit) {
+    if ((mKinds & ReferenceView::Stash) &&
+        !(mKinds & ReferenceView::StashList) && stashOnCommit) {
       if (git::Reference stash = mRepo.stashRef())
         branches.append(stash);
     }
@@ -150,6 +146,22 @@ void ReferenceModel::update() {
     std::sort(tags.begin(), tags.end(), refComparator);
     mRefs.append(
         {tr("Tags"), tags, ReferenceType::Tags}); // Third element in mRefs
+  }
+
+  // Add each stash. They all select the stash reference.
+  if (mKinds & ReferenceView::StashList) {
+    ReferenceList stashes{tr("Stashes"), {}, ReferenceType::Stashes};
+    git::Reference stash = mRepo.stashRef();
+    const QList<git::Commit> commits = mRepo.stashes();
+    for (int i = 0; i < commits.size(); ++i) {
+      const git::Commit &commit = commits.at(i);
+      stashes.refs.append(stash);
+      stashes.labels.append(
+          QString("stash@{%1}: %2").arg(i).arg(commit.summary()));
+      stashes.toolTips.append(QLocale().toString(commit.committer().date(),
+                                                 QLocale::LongFormat));
+    }
+    mRefs.append(stashes);
   }
 
   endResetModel();
@@ -249,12 +261,21 @@ QVariant ReferenceModel::data(const QModelIndex &index, int role) const {
   auto refType = static_cast<ReferenceType>(id);
 
   // refs
-  git::Reference ref = mRefs.at(referenceTypeToIndex(refType)).refs.at(row);
+  const ReferenceList &list = mRefs.at(referenceTypeToIndex(refType));
+  git::Reference ref = list.refs.at(row);
   switch (role) {
     case Qt::DisplayRole:
+      if (!list.labels.isEmpty())
+        return list.labels.at(row);
       return ref.isValid() ? ref.name() : QString();
 
+    case ReferenceView::StashIndexRole:
+      return (refType == ReferenceType::Stashes) ? QVariant(row) : QVariant();
+
     case Qt::ToolTipRole: {
+      if (!list.toolTips.isEmpty())
+        return list.toolTips.at(row);
+
       if (!ref.isValid() || !ref.isTag())
         return QVariant();
 
