@@ -45,9 +45,23 @@ if(GIT_FOUND)
             --format=%h HEAD
     OUTPUT_VARIABLE GITTYUP_BUILD_REVISION
     OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+  # Configure again when HEAD moves, so that the revision and the build date
+  # (shown in the about dialog) belong to the built commit.
+  foreach(file HEAD logs/HEAD)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/.git/${file}")
+      set_property(
+        DIRECTORY
+        APPEND
+        PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/.git/${file}")
+    endif()
+  endforeach()
 else()
   set(GITTYUP_BUILD_REVISION "unknown")
 endif()
+
+option(GITTYUP_REVISION_IN_PACKAGE_NAME
+       "Append the git revision to the package file name" ON)
 
 # Explicitly disable shared libraries.
 set(BUILD_SHARED_LIBS OFF)
