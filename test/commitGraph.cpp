@@ -14,12 +14,16 @@
 #include "git/Index.h"
 #include "git/Reference.h"
 #include "git/RevWalk.h"
+#include "git2/commit.h"
+#include "git2/refs.h"
 #include "git2/revwalk.h"
+#include "git2/signature.h"
 #include "git2/sys/commit_graph.h"
 #include <QDir>
 #include <QFile>
 #include <QProcess>
 #include <QStandardPaths>
+#include <vector>
 
 using namespace git;
 
@@ -170,35 +174,52 @@ void TestCommitGraph::locked() {
 
 // libgit2 computes wrong generation numbers for histories with merges.
 void TestCommitGraph::mergesHaveValidGenerations() {
-  QString git = QStandardPaths::findExecutable("git");
-  if (git.isEmpty())
-    QSKIP("git is needed to create merges");
-
-  auto run = [this, &git](const QStringList &args) {
-    QProcess process;
-    process.setWorkingDirectory(mRepo.workdir().path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(git, QStringList({"-c", "user.name=Test", "-c",
-                                    "user.email=test@example.com"}) +
-                           args);
-    return process.waitForFinished(60000) && process.exitCode() == 0;
-  };
-
-  // Merges of branches with and without new commits on the main branch.
-  QString main = mRepo.head().name();
-  for (int i = 0; i < 40; ++i) {
-    QString branch = QString("b%1").arg(i);
-    QVERIFY(run({"checkout", "-q", "-b", branch}));
-    QVERIFY(run({"commit", "-q", "--allow-empty", "-m", branch}));
-    QVERIFY(run({"checkout", "-q", main}));
-    if (i % 2)
-      QVERIFY(run({"commit", "-q", "--allow-empty", "-m", "main"}));
-    QVERIFY(run({"merge", "-q", "--no-ff", "-m", "merge", branch}));
-  }
-
-  // The libgit2 writer alone gets them wrong.
   git_repository *repo = nullptr;
   QVERIFY(!git_repository_open(&repo, mRepo.dir().path().toUtf8()));
+
+  // Merges of branches with and without new commits on the main branch,
+  // created directly (running git for each one takes too long).
+  git_oid head;
+  QVERIFY(!git_reference_name_to_id(&head, repo, "HEAD"));
+  git_commit *tip = nullptr;
+  QVERIFY(!git_commit_lookup(&tip, repo, &head));
+  git_tree *tree = nullptr;
+  QVERIFY(!git_commit_tree(&tree, tip));
+  git_signature *sig = nullptr;
+  QVERIFY(!git_signature_now(&sig, "Test", "test@example.com"));
+
+  auto commit = [&](const char *message, const char *ref,
+                    std::vector<const git_commit *> parents) {
+    git_oid id;
+    git_commit *result = nullptr;
+    if (!git_commit_create(&id, repo, ref, sig, sig, nullptr, message, tree,
+                           parents.size(), parents.data()))
+      git_commit_lookup(&result, repo, &id);
+    return result;
+  };
+
+  for (int i = 0; i < 40; ++i) {
+    git_commit *branch = commit("branch", nullptr, {tip});
+    QVERIFY(branch);
+    if (i % 2) {
+      git_commit *main = commit("main", "HEAD", {tip});
+      QVERIFY(main);
+      git_commit_free(tip);
+      tip = main;
+    }
+
+    git_commit *merge = commit("merge", "HEAD", {tip, branch});
+    QVERIFY(merge);
+    git_commit_free(branch);
+    git_commit_free(tip);
+    tip = merge;
+  }
+
+  git_commit_free(tip);
+  git_tree_free(tree);
+  git_signature_free(sig);
+
+  // The libgit2 writer alone gets them wrong.
   QString info = QFileInfo(CommitGraph::path(mRepo)).path();
   git_commit_graph_writer *writer = nullptr;
   git_commit_graph_writer_options opts = GIT_COMMIT_GRAPH_WRITER_OPTIONS_INIT;
