@@ -30,6 +30,8 @@ private slots:
   void headChangeRebuildsRows();
   void logStaysOpen();
   void slowStatusInLog();
+  void secondWindowOfRepository();
+  void externalChanges();
   void cleanupTestCase();
 
 private:
@@ -169,6 +171,54 @@ void TestCommitListStatus::slowStatusInLog() {
   emit mCommits->statusProgress(10, 100, 3500);
   QCOMPARE(root->entries().size(), count + 3);
   emit mCommits->statusChecked(0, 100, 3600);
+}
+
+void TestCommitListStatus::secondWindowOfRepository() {
+  // A second window of the same repository object shares its notifier. Its
+  // connections must go away with it.
+  {
+    MainWindow window(mRepo);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+  }
+
+  emit mRepo->notifier()->referenceUpdated(mRepo->head());
+  emit mRepo->notifier()->indexChanged({"a.txt"}, false);
+  QVERIFY(waitForStatus());
+}
+
+void TestCommitListStatus::externalChanges() {
+  // Earlier tests changed the repository without notifications.
+  mView->checkExternalChanges();
+  QTest::qWait(100);
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 10000);
+
+  // Nothing changed: nothing is refreshed.
+  QSignalSpy resets(mCommits->model(), &QAbstractItemModel::modelReset);
+  QSignalSpy status(mView, &RepoView::statusChanged);
+  mView->checkExternalChanges();
+  QTest::qWait(500);
+  QCOMPARE(resets.count(), 0);
+  QCOMPARE(status.count(), 0);
+
+  // Staged by another tool: the status is checked again.
+  writeFile("d.txt", "d\n");
+  mRepo->notifier()->blockSignals(true);
+  mRepo->index().setStaged({"d.txt"}, true);
+  mRepo->notifier()->blockSignals(false);
+  mView->checkExternalChanges();
+  QVERIFY(status.wait(10000));
+  QCOMPARE(resets.count(), 0);
+
+  // Committed by another tool: the history is loaded again.
+  int rows = mCommits->model()->rowCount();
+  mRepo->notifier()->blockSignals(true);
+  bool committed = mRepo->commit("D").isValid();
+  mRepo->notifier()->blockSignals(false);
+  QVERIFY(committed);
+  mView->checkExternalChanges();
+  QTRY_VERIFY_WITH_TIMEOUT(resets.count() > 0, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(mCommits->model()->rowCount(), rows + 1, 10000);
 }
 
 void TestCommitListStatus::cleanupTestCase() {

@@ -136,6 +136,10 @@ MainWindow::MainWindow(const git::Repository &repo, QWidget *parent,
   connect(tabs, &TabWidget::currentChanged, [this](int index) {
     updateInterface();
     MenuBar::instance(this)->update();
+
+    // The repository may have changed while its tab was hidden.
+    if (RepoView *view = currentView())
+      view->checkExternalChanges();
   });
 
   connect(tabs, QOverload<>::of(&TabWidget::tabInserted), this,
@@ -416,6 +420,16 @@ void MainWindow::showEvent(QShowEvent *event) {
 
   mShown = true;
   updateInterface();
+}
+
+void MainWindow::changeEvent(QEvent *event) {
+  // Show changes made by other tools while the window was inactive.
+  if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+    if (RepoView *view = currentView())
+      view->checkExternalChanges();
+  }
+
+  QMainWindow::changeEvent(event);
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
