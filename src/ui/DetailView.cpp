@@ -292,9 +292,12 @@ public:
     };
 
     git::RepositoryNotifier *notifier = view->repo().notifier();
-    connect(notifier, &git::RepositoryNotifier::referenceAdded, resetRefs);
-    connect(notifier, &git::RepositoryNotifier::referenceRemoved, resetRefs);
-    connect(notifier, &git::RepositoryNotifier::referenceUpdated, resetRefs);
+    connect(notifier, &git::RepositoryNotifier::referenceAdded, this,
+            resetRefs);
+    connect(notifier, &git::RepositoryNotifier::referenceRemoved, this,
+            resetRefs);
+    connect(notifier, &git::RepositoryNotifier::referenceUpdated, this,
+            resetRefs);
   }
 
   void setReferences(const QList<git::Commit> &commits) {
