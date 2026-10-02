@@ -1443,12 +1443,12 @@ CommitList::CommitList(Index *index, QWidget *parent)
           &CommitList::statusChecked);
 
   git::RepositoryNotifier *notifier = repo.notifier();
-  connect(notifier, &git::RepositoryNotifier::referenceUpdated,
+  connect(notifier, &git::RepositoryNotifier::referenceUpdated, this,
           [this](const git::Reference &ref, bool restoreSelection) {
             mRestoreSelection = restoreSelection;
             resetReference(ref);
           });
-  connect(notifier, &git::RepositoryNotifier::workdirChanged,
+  connect(notifier, &git::RepositoryNotifier::workdirChanged, model,
           [model] { model->refreshStatus(); });
 
   // Show the new status if the status row is selected.
