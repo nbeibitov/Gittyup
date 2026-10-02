@@ -118,6 +118,10 @@ public:
 
   // refs
   QList<Reference> refs() const;
+
+  // Hash of HEAD and the names and targets of all references. It changes
+  // whenever a reference is created, deleted or moved, also by other tools.
+  QByteArray refsSignature() const;
   Reference lookupRef(const QString &name) const;
 
   Reference head() const;

@@ -231,6 +231,11 @@ public:
   // Update the stat information of the index in the background
   void refreshIndex();
 
+  // Refresh if references or the index were changed by other tools (e.g.
+  // the git command line). Changes in .git are not watched, so this is
+  // called when the window is activated.
+  void checkExternalChanges();
+
   // interactive rebase of the commits after base
   void openInteractiveRebase(const git::Commit &base);
   void interactiveRebase(const git::Commit &base,
@@ -465,6 +470,11 @@ private:
   QFutureWatcher<bool> mCommitGraph;
   QElapsedTimer mCommitGraphTime;
   LogEntry *mStatusEntry = nullptr;
+
+  // Last seen state of the references and the index.
+  QByteArray mRefsSignature;
+  QString mIndexStamp;
+  QString indexStamp() const;
   QFutureWatcher<git::IndexRefresh::Result> mIndexRefresh;
   QElapsedTimer mIndexRefreshTime;
   LogEntry *mIndexRefreshEntry = nullptr;

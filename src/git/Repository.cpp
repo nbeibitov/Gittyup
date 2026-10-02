@@ -47,6 +47,8 @@
 #include "git2/sys/repository.h"
 #include "git2/sys/errors.h"
 #include "git2/attr.h"
+#include <QCryptographicHash>
+#include <algorithm>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -419,6 +421,47 @@ QList<Reference> Repository::refs() const {
   git_reference_iterator_free(it);
 
   return refs;
+}
+
+QByteArray Repository::refsSignature() const {
+  // Describe a reference without peeling it (fast for many tags).
+  auto describe = [](git_reference *ref) {
+    QByteArray text = git_reference_name(ref);
+    text += ' ';
+    if (const git_oid *id = git_reference_target(ref)) {
+      char hex[GIT_OID_MAX_HEXSIZE + 1];
+      text += git_oid_tostr(hex, sizeof(hex), id);
+    } else if (const char *target = git_reference_symbolic_target(ref)) {
+      text += target;
+    }
+    return text;
+  };
+
+  QList<QByteArray> lines;
+  git_reference *ref = nullptr;
+  if (!git_reference_lookup(&ref, d->repo, "HEAD")) {
+    lines.append(describe(ref));
+    git_reference_free(ref);
+  }
+
+  git_reference_iterator *it = nullptr;
+  if (!git_reference_iterator_new(&it, d->repo)) {
+    while (!git_reference_next(&ref, it)) {
+      lines.append(describe(ref));
+      git_reference_free(ref);
+    }
+    git_reference_iterator_free(it);
+  }
+
+  // The iteration order isn't defined.
+  std::sort(lines.begin(), lines.end());
+
+  QCryptographicHash hash(QCryptographicHash::Sha1);
+  for (const QByteArray &line : lines) {
+    hash.addData(line);
+    hash.addData(QByteArrayView("\n", 1));
+  }
+  return hash.result();
 }
 
 Reference Repository::lookupRef(const QString &name) const {

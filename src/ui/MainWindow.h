@@ -58,6 +58,7 @@ public:
   static void setSaveWindowSettings(bool enabled);
 
 protected:
+  void changeEvent(QEvent *event) override;
   void showEvent(QShowEvent *event) override;
   void closeEvent(QCloseEvent *event) override;
   void dragEnterEvent(QDragEnterEvent *event) override;

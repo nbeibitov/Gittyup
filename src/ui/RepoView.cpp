@@ -576,6 +576,43 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
 
   // Don't compete with loading the repository.
   QTimer::singleShot(10000, this, &RepoView::updateCommitGraph);
+
+  // Changes of Gittyup itself are already shown.
+  mRefsSignature = mRepo.refsSignature();
+  mIndexStamp = indexStamp();
+  connect(notifier, &git::RepositoryNotifier::referenceUpdated, this,
+          [this] { mRefsSignature = mRepo.refsSignature(); });
+  connect(notifier, &git::RepositoryNotifier::indexChanged, this,
+          [this] { mIndexStamp = indexStamp(); });
+}
+
+QString RepoView::indexStamp() const {
+  QFileInfo info(mRepo.dir().filePath("index"));
+  if (!info.exists())
+    return QString();
+  return QString("%1 %2").arg(info.size()).arg(
+      info.lastModified().toMSecsSinceEpoch());
+}
+
+void RepoView::checkExternalChanges() {
+  if (!mRepo.isValid())
+    return;
+
+  // Commits, checkouts, fetches, branches, ...
+  QByteArray refs = mRepo.refsSignature();
+  if (refs != mRefsSignature) {
+    mRefsSignature = refs;
+    mIndexStamp = indexStamp();
+    refresh(true);
+    return;
+  }
+
+  // Staging and unstaging.
+  QString index = indexStamp();
+  if (index != mIndexStamp) {
+    mIndexStamp = index;
+    emit mRepo.notifier()->workdirChanged();
+  }
 }
 
 void RepoView::diffSelected(const git::Diff diff, const QString &file,
