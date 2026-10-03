@@ -11,6 +11,7 @@
 #include "git/Config.h"
 #include "git/Index.h"
 #include "ui/CommitList.h"
+#include "ui/ConfigKeys.h"
 #include "ui/DoubleTreeWidget.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
@@ -18,6 +19,7 @@
 #include "ui/ReferenceView.h"
 #include "ui/ReferenceWidget.h"
 #include "ui/TreeView.h"
+#include <QLabel>
 #include <QSignalSpy>
 
 using namespace Test;
@@ -36,6 +38,7 @@ private slots:
   void secondWindowOfRepository();
   void externalChanges();
   void stashesTab();
+  void leaveStashes();
   void pathHistoryInBackground();
   void cleanupTestCase();
 
@@ -267,6 +270,61 @@ void TestCommitListStatus::stashesTab() {
   emit view->clicked(second);
   QTRY_COMPARE_WITH_TIMEOUT(mView->commits().size(), 1, 60000);
   QCOMPARE(mView->commits().first().id(), stashes.at(1).id());
+}
+
+void TestCommitListStatus::leaveStashes() {
+  auto refs = mView->findChild<ReferenceWidget *>();
+  QVERIFY(refs);
+  auto view = refs->findChild<ReferenceView *>();
+  QVERIFY(view);
+  QLabel *label = nullptr;
+  for (QLabel *child : refs->findChildren<QLabel *>()) {
+    if (child->text().contains("<a href"))
+      label = child;
+  }
+  QVERIFY(label);
+
+  // The previous test chose a stash, the label says so.
+  QVERIFY2(label->text().contains(">stash<"), qPrintable(label->text()));
+
+  QAbstractItemModel *model = view->model();
+  auto find = [model](const QString &name) {
+    QModelIndexList indexes = model->match(
+        model->index(0, 0), Qt::DisplayRole, name, 1,
+        Qt::MatchFixedString | Qt::MatchCaseSensitive | Qt::MatchRecursive);
+    return indexes.value(0);
+  };
+
+  // Choosing the branch of HEAD shows its history again.
+  git::Reference head = mRepo->head();
+  QModelIndex branch = find(head.name());
+  QVERIFY(branch.isValid());
+  view->setCurrentIndex(branch);
+  emit view->clicked(branch);
+  QTRY_VERIFY_WITH_TIMEOUT(mCommits->model()->rowCount() > 2, 60000);
+  QVERIFY2(label->text().contains(head.name()), qPrintable(label->text()));
+
+  // The stashes are shown although the branch stays current (e.g. after a
+  // stash is dropped): choosing the branch again leaves them.
+  emit refs->referenceChanged(mRepo->stashRef());
+  QTRY_COMPARE_WITH_TIMEOUT(mCommits->model()->rowCount(), 2, 60000);
+  emit view->clicked(branch);
+  QTRY_VERIFY_WITH_TIMEOUT(mCommits->model()->rowCount() > 2, 60000);
+
+  // Showing only the selected branch, another branch can be chosen.
+  mRepo->appConfig().setValue(ConfigKeys::kRefsKey,
+                              (int)CommitList::RefsFilter::SelectedRef);
+  QVERIFY(mRepo->createBranch("other", head.target().parents().value(0))
+              .isValid());
+  QModelIndex other;
+  QTRY_VERIFY_WITH_TIMEOUT((other = find("other")).isValid(), 60000);
+  view->setCurrentIndex(other);
+  QCOMPARE(refs->currentReference().name(), QString("other"));
+  QVERIFY2(label->text().contains("other"), qPrintable(label->text()));
+
+  mRepo->appConfig().setValue(ConfigKeys::kRefsKey,
+                              (int)CommitList::RefsFilter::AllRefs);
+  mView->selectReference(head);
 }
 
 void TestCommitListStatus::pathHistoryInBackground() {
