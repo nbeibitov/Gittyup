@@ -10,12 +10,17 @@
 #include "Test.h"
 #include "git/Config.h"
 #include "git/Index.h"
+#include "git/Signature.h"
 #include "ui/CommitList.h"
 #include "ui/ConfigKeys.h"
 #include "ui/DoubleTreeWidget.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
 #include "log/LogEntry.h"
+#include "git2/commit.h"
+#include "git2/refs.h"
+#include "git2/repository.h"
+#include "git2/signature.h"
 #include "ui/ReferenceView.h"
 #include "ui/ReferenceWidget.h"
 #include "ui/TreeView.h"
@@ -40,6 +45,7 @@ private slots:
   void stashesTab();
   void leaveStashes();
   void pathHistoryInBackground();
+  void topologicalFindsCommit();
   void cleanupTestCase();
 
 private:
@@ -391,6 +397,82 @@ void TestCommitListStatus::pathHistoryInBackground() {
 
   setPath(QString());
   mRepo->appConfig().setValue("index.enable", true);
+}
+
+void TestCommitListStatus::topologicalFindsCommit() {
+  git_repository *repo = nullptr;
+  QVERIFY(!git_repository_open(&repo, mRepo->workdir().path().toUtf8()));
+  git_oid oid;
+  QVERIFY(!git_reference_name_to_id(&oid, repo, "HEAD"));
+  git_commit *tip = nullptr;
+  QVERIFY(!git_commit_lookup(&tip, repo, &oid));
+  git_commit *root = nullptr;
+  QVERIFY(!git_commit_lookup(&root, repo, &oid));
+  while (git_commit_parentcount(root) > 0) {
+    git_commit *parent = nullptr;
+    QVERIFY(!git_commit_parent(&parent, root, 0));
+    git_commit_free(root);
+    root = parent;
+  }
+  git_tree *tree = nullptr;
+  QVERIFY(!git_commit_tree(&tree, tip));
+
+  // Commits in hours from now, on HEAD or on a branch off the first commit.
+  qint64 now = QDateTime::currentSecsSinceEpoch();
+  auto commit = [&](int hours, const char *ref, git_commit *parent) {
+    git_signature *sig = nullptr;
+    git_signature_new(&sig, "Test", "test@example.com", now + hours * 60 * 60,
+                      0);
+    const git_commit *parents[] = {parent};
+    git_commit *result = nullptr;
+    if (!git_commit_create(&oid, repo, ref, sig, sig, nullptr, "topo", tree, 1,
+                           parents))
+      git_commit_lookup(&result, repo, &oid);
+    git_signature_free(sig);
+    return result;
+  };
+
+  // The tip of the branch is older than the new commits of HEAD.
+  git_commit *first = commit(24, "HEAD", tip);
+  QVERIFY(first);
+  git::Commit target = mRepo->lookupCommit(git_oid_tostr_s(&oid));
+  git_commit *second = commit(48, "HEAD", first);
+  QVERIFY(second);
+  git_commit *branch = commit(12, "refs/heads/side", root);
+  QVERIFY(branch);
+  for (git_commit *c : {tip, root, first, second, branch})
+    git_commit_free(c);
+  git_tree_free(tree);
+  git_repository_free(repo);
+  QVERIFY(target.isValid());
+
+  // Sorted topologically, the rows aren't ordered by date.
+  mRepo->appConfig().setValue(ConfigKeys::kSortKey, false);
+  mCommits->resetSettings();
+  QCoreApplication::processEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+
+  // An older commit (the tip of the branch) comes before the target.
+  QAbstractItemModel *model = mCommits->model();
+  while (model->canFetchMore(QModelIndex()))
+    model->fetchMore(QModelIndex());
+  bool older = false;
+  for (int i = 0; i < model->rowCount(); ++i) {
+    auto tmp =
+        model->index(i, 0).data(CommitList::CommitRole).value<git::Commit>();
+    if (tmp == target)
+      break;
+    if (tmp.isValid() && tmp.committer().date() < target.committer().date())
+      older = true;
+  }
+  QVERIFY(older);
+
+  // The commit is found anyway.
+  QVERIFY(mCommits->selectRange(target.id().toString()));
+  QCOMPARE(mView->commits().value(0).id(), target.id());
+
+  mRepo->appConfig().setValue(ConfigKeys::kSortKey, true);
+  mCommits->resetSettings();
 }
 
 void TestCommitListStatus::cleanupTestCase() {

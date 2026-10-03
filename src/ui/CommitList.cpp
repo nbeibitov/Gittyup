@@ -319,6 +319,8 @@ public:
 
   bool canFetchMoreNow() const { return mWalker.isValid(); }
 
+  bool sortsByDate() const { return mSortDate; }
+
   // Load more rows before returning, e.g. to find an older commit.
   void fetchMoreNow() {
     if (mFetching) {
@@ -2219,22 +2221,27 @@ QModelIndex CommitList::findCommit(const git::Commit &commit) {
     return !tmp.isValid() ? index : QModelIndex();
   }
 
-  // Find the id.
+  // Find the id. Sorted by date, an older commit ends the search. Sorted
+  // topologically, the dates aren't ordered, but a commit comes before its
+  // parents.
+  auto commits = qobject_cast<CommitModel *>(model);
+  bool byDate = !commits || commits->sortsByDate();
   QDateTime date = commit.committer().date();
+  QList<git::Commit> parents = commit.parents();
   for (int i = 0; i < model->rowCount(); ++i) {
     QModelIndex index = model->index(i, 0);
     if (git::Commit tmp = index.data(CommitRole).value<git::Commit>()) {
       if (tmp == commit)
         return index;
 
-      // Cut off search if we find an older commit.
-      if (tmp.committer().date() < date)
+      // Cut off search if the commit can't come anymore.
+      if (byDate ? tmp.committer().date() < date : parents.contains(tmp))
         return QModelIndex();
     }
 
     // Load more commits.
     if (i == model->rowCount() - 1) {
-      if (auto commits = qobject_cast<CommitModel *>(model)) {
+      if (commits) {
         if (commits->canFetchMoreNow())
           commits->fetchMoreNow();
       } else if (model->canFetchMore(QModelIndex())) {
