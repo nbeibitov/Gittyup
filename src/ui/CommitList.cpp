@@ -1674,12 +1674,10 @@ void CommitList::selectReference(const git::Reference &ref) {
   if (!ref.isValid())
     return;
 
-  QModelIndex index = model()->index(0, 0);
-  if (ref.isHead() && !index.data(CommitRole).isValid()) {
+  // Select the commit of the reference, also for HEAD: other branches can
+  // come first. Without its commit, HEAD selects the first row (the status).
+  if (!selectRange(ref.target().id().toString()) && ref.isHead())
     selectFirstCommit();
-  } else {
-    selectRange(ref.target().id().toString());
-  }
 }
 
 void CommitList::resetSelection(bool spontaneous) {

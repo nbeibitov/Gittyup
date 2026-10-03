@@ -46,6 +46,7 @@ private slots:
   void leaveStashes();
   void pathHistoryInBackground();
   void topologicalFindsCommit();
+  void chooseHeadBranch();
   void cleanupTestCase();
 
 private:
@@ -473,6 +474,67 @@ void TestCommitListStatus::topologicalFindsCommit() {
 
   mRepo->appConfig().setValue(ConfigKeys::kSortKey, true);
   mCommits->resetSettings();
+}
+
+void TestCommitListStatus::chooseHeadBranch() {
+  // A branch newer than HEAD comes first.
+  git::Commit head = mRepo->head().target();
+  git_signature *sig = nullptr;
+  qint64 time = head.committer().date().toSecsSinceEpoch() + 24 * 60 * 60;
+  QVERIFY(!git_signature_new(&sig, "Test", "test@example.com", time, 0));
+  git_repository *repo = nullptr;
+  QVERIFY(!git_repository_open(&repo, mRepo->workdir().path().toUtf8()));
+  git_oid oid;
+  QVERIFY(!git_reference_name_to_id(&oid, repo, "HEAD"));
+  git_commit *tip = nullptr;
+  QVERIFY(!git_commit_lookup(&tip, repo, &oid));
+  git_tree *tree = nullptr;
+  QVERIFY(!git_commit_tree(&tree, tip));
+  const git_commit *parents[] = {tip};
+  QVERIFY(!git_commit_create(&oid, repo, nullptr, sig, sig, nullptr, "newer",
+                             tree, 1, parents));
+  git_signature_free(sig);
+  git_tree_free(tree);
+  git_commit_free(tip);
+  git_repository_free(repo);
+
+  // The first row is the status of the working directory.
+  writeFile("a.txt", "dirty\n");
+  QVERIFY(waitForStatus());
+
+  // The previous tests moved HEAD without a notification.
+  emit mRepo->notifier()->referenceUpdated(mRepo->head());
+  git::Commit newer = mRepo->lookupCommit(git_oid_tostr_s(&oid));
+  QVERIFY(mRepo->createBranch("newer", newer).isValid());
+  QCoreApplication::processEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  QTRY_COMPARE_WITH_TIMEOUT(mCommits->model()
+                                ->index(1, 0)
+                                .data(CommitList::CommitRole)
+                                .value<git::Commit>(),
+                            newer, 60000);
+
+  // Choosing the branch of HEAD selects its commit.
+  auto refs = mView->findChild<ReferenceWidget *>();
+  QVERIFY(refs);
+  auto view = refs->findChild<ReferenceView *>();
+  QVERIFY(view);
+  QAbstractItemModel *model = view->model();
+  QModelIndex branch;
+  QTRY_VERIFY_WITH_TIMEOUT(
+      (branch = model
+                    ->match(model->index(0, 0), Qt::DisplayRole,
+                            mRepo->head().name(), 1,
+                            Qt::MatchFixedString | Qt::MatchCaseSensitive |
+                                Qt::MatchRecursive)
+                    .value(0))
+          .isValid(),
+      60000);
+  view->setCurrentIndex(branch);
+  emit view->clicked(branch);
+  QTRY_COMPARE_WITH_TIMEOUT(mView->commits().value(0).id(), head.id(), 60000);
+
+  writeFile("a.txt", "changed\n");
 }
 
 void TestCommitListStatus::cleanupTestCase() {
