@@ -44,6 +44,7 @@ private:
 
   git::Repository mRepo;
   git::Reference mStoredRef;
+  git::Reference mShownRef;
   bool mSpontaneous = true;
 };
 

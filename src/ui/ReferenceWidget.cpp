@@ -8,6 +8,7 @@
 //
 
 #include "ReferenceWidget.h"
+#include "CommitList.h"
 #include "ExpandButton.h"
 #include "ConfigKeys.h"
 #include "git/Config.h"
@@ -24,6 +25,14 @@ const QString kBoldFmt = "<b>%1</b>";
 const QString kNameFmt = "<span style='color: %1'>%2:</span> %3";
 const QString kLinkFmt =
     "<a href='ref' style='color: %1; text-decoration: none'>%2</a>";
+
+// The commit list shows all references and marks the chosen one, instead of
+// showing only the history of the chosen one.
+bool showsAllRefs(const git::Repository &repo) {
+  int filter = repo.appConfig().value<int>(
+      ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::AllRefs);
+  return filter == (int)CommitList::RefsFilter::AllRefs;
+}
 
 QModelIndex findReference(QAbstractItemModel *model,
                           const git::Reference &ref) {
@@ -100,7 +109,7 @@ public:
                        QItemSelectionModel::SelectionFlags command) override {
     QModelIndex current = index;
     git::Reference head = mRepo.head();
-    bool all = mRepo.appConfig().value<bool>(ConfigKeys::kRefsKey, true);
+    bool all = showsAllRefs(mRepo);
     git::Reference ref = index.data(Qt::UserRole).value<git::Reference>();
     if (all && ref && !ref.isHead() && !ref.isStash() && head.isValid())
       current = findReference(model(), head);
@@ -160,6 +169,7 @@ ReferenceWidget::ReferenceWidget(const git::Repository &repo,
   // Handle selection change.
   QItemSelectionModel *selection = mView->selectionModel();
   connect(selection, &QItemSelectionModel::currentChanged, [this] {
+    updateLabel(currentReference());
     if (!mSpontaneous)
       return;
 
@@ -173,7 +183,20 @@ ReferenceWidget::ReferenceWidget(const git::Repository &repo,
       mView->setFocus();
   });
 
+  // Remember what the commit list shows.
+  connect(this, &ReferenceWidget::referenceChanged,
+          [this](const git::Reference &ref) { mShownRef = ref; });
+
   connect(mView, &ReferenceView::clicked, [this](const QModelIndex &index) {
+    // Choosing the current branch while the stashes are shown (the current
+    // index doesn't change then) shows its history again.
+    git::Reference ref = currentReference();
+    if (mShownRef.isValid() && mShownRef.isStash() && ref.isValid() &&
+        !ref.isStash()) {
+      updateLabel(ref);
+      emit referenceChanged(ref);
+    }
+
     emit referenceSelected(index.data(Qt::UserRole).value<git::Reference>());
 
     QVariant stash = index.data(ReferenceView::StashIndexRole);
@@ -222,7 +245,7 @@ void ReferenceWidget::updateLabel(const git::Reference &ref) {
 
 git::Reference ReferenceWidget::currentReference() const {
   git::Reference ref = mView->currentReference();
-  bool all = mRepo.appConfig().value<bool>(ConfigKeys::kRefsKey, true);
+  bool all = showsAllRefs(mRepo);
   return (!all || (ref.isValid() && ref.isStash())) ? ref : mRepo.head();
 }
 

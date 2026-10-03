@@ -2633,7 +2633,7 @@ void RepoView::dropStash(int index) {
 
   if (mRepo.stashes().size() == 0) {
     // switch back to head when there are no stashes left
-    mCommits->setReference(mRepo.head());
+    selectReference(mRepo.head());
   } else {
     mCommits->setReference(mRepo.stashRef());
   }
