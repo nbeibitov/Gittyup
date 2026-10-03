@@ -38,6 +38,7 @@
 #include <QPainterPath>
 #include <QSet>
 #include <atomic>
+#include <memory>
 #include <QPushButton>
 #include <QStyledItemDelegate>
 #include <QTextLayout>
@@ -124,6 +125,11 @@ public:
         dispatchResetWalker(true);
     });
 
+    connect(&mFetch, &QFutureWatcher<AsyncFetch>::finished, [this] {
+      if (mFetch.future().resultCount())
+        applyFetch(mFetch.result());
+    });
+
     // Apply the result of an asynchronous walker reset on the GUI thread.
     connect(&mReset, &QFutureWatcher<ResetResult>::finished, [this] {
       ResetResult result = mReset.result();
@@ -141,6 +147,12 @@ public:
     // Ensure that mStatus is stopped since it captures `this` and potentially
     // might crash after the destructor is finished
     cancelStatus();
+
+    // A fetch uses the repository, which may go away with this model.
+    if (mFetch.isRunning()) {
+      *mFetchCanceled = true;
+      mFetch.waitForFinished();
+    }
 
     // ..and the same applies to mReset too
     if (mReset.isRunning())
@@ -263,25 +275,63 @@ public:
   }
 
   bool canFetchMore(const QModelIndex &parent) const {
-    return mWalker.isValid();
+    return mWalker.isValid() && !mFetching;
   }
 
+  // Called by the view when it needs more rows. Walking the history of a
+  // path diffs every commit and can take long between matches, so it runs
+  // on another thread.
   void fetchMore(const QModelIndex &parent) {
-    FetchResult fetched = fetchRows(mWalker, mParents, mSeen, mPathspec,
-                                    mGraphVisible, mRefsFilter);
-
-    // Update the model.
-    if (!fetched.rows.isEmpty()) {
-      int first = mRows.size();
-      int last = first + fetched.rows.size() - 1;
-      beginInsertRows(QModelIndex(), first, last);
-      mRows.append(fetched.rows);
-      endInsertRows();
+    if (mPathspec.isEmpty()) {
+      fetchMoreNow();
+      return;
     }
 
-    // Invalidate walker.
-    if (fetched.exhausted)
-      mWalker = git::RevWalk();
+    if (mFetching || !mWalker.isValid())
+      return;
+
+    // Set before anything else: the signals below may ask for more rows.
+    mFetching = true;
+
+    // The thread works on copies, nothing else uses the walker meanwhile.
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    mFetchCanceled = canceled;
+    git::RevWalk walker = mWalker;
+    QList<Parent> parents = mParents;
+    QSet<git::Id> seen = mSeen;
+    QString pathspec = mPathspec;
+    bool graphVisible = mGraphVisible;
+    CommitList::RefsFilter refsFilter = mRefsFilter;
+    int generation = mFetchGeneration;
+
+    mFetch.setFuture(QtConcurrent::run([=]() mutable {
+      AsyncFetch result;
+      result.fetched = fetchRows(walker, parents, seen, pathspec, graphVisible,
+                                 refsFilter, canceled.get());
+      result.parents = std::move(parents);
+      result.seen = std::move(seen);
+      result.generation = generation;
+      result.canceled = *canceled;
+      return result;
+    }));
+    emit fetchingChanged(true);
+  }
+
+  bool canFetchMoreNow() const { return mWalker.isValid(); }
+
+  // Load more rows before returning, e.g. to find an older commit.
+  void fetchMoreNow() {
+    if (mFetching) {
+      mFetch.waitForFinished();
+      AsyncFetch result = mFetch.result();
+      mFetch.setFuture(QFuture<AsyncFetch>()); // handled here
+      applyFetch(std::move(result));
+      return;
+    }
+
+    FetchResult fetched = fetchRows(mWalker, mParents, mSeen, mPathspec,
+                                    mGraphVisible, mRefsFilter);
+    insertRows(std::move(fetched));
   }
 
   int rowCount(const QModelIndex &parent = QModelIndex()) const {
@@ -368,6 +418,9 @@ signals:
   // The status row was updated in place without resetting the model.
   void statusRowUpdated();
 
+  // A background fetch of more rows started or ended.
+  void fetchingChanged(bool fetching);
+
   // Progress of the running status check, and its result.
   void statusProgress(int files, int total, qint64 msecs);
   void statusChecked(int changes, int files, qint64 msecs);
@@ -442,6 +495,42 @@ private:
     QList<Row> rows;
     bool exhausted = false;
   };
+
+  // Result of a fetch on another thread with the state it continued.
+  struct AsyncFetch {
+    FetchResult fetched;
+    QList<Parent> parents;
+    QSet<git::Id> seen;
+    int generation = 0;
+    bool canceled = false;
+  };
+
+  void insertRows(FetchResult &&fetched) {
+    if (!fetched.rows.isEmpty()) {
+      int first = mRows.size();
+      int last = first + fetched.rows.size() - 1;
+      beginInsertRows(QModelIndex(), first, last);
+      mRows.append(fetched.rows);
+      endInsertRows();
+    }
+
+    // Invalidate walker.
+    if (fetched.exhausted)
+      mWalker = git::RevWalk();
+  }
+
+  void applyFetch(AsyncFetch &&result) {
+    mFetching = false;
+
+    // Unless the rows were reset meanwhile.
+    if (!result.canceled && result.generation == mFetchGeneration) {
+      mParents = std::move(result.parents);
+      mSeen = std::move(result.seen);
+      insertRows(std::move(result.fetched));
+    }
+
+    emit fetchingChanged(false);
+  }
 
   static int indexOf(const QList<Parent> &parents, const git::Commit &commit) {
     int count = parents.size();
@@ -550,10 +639,11 @@ private:
   static FetchResult fetchRows(git::RevWalk &walker, QList<Parent> &parents,
                                QSet<git::Id> &seen, const QString &pathspec,
                                bool graphVisible,
-                               CommitList::RefsFilter refsFilter) {
+                               CommitList::RefsFilter refsFilter,
+                               const std::atomic<bool> *canceled = nullptr) {
     FetchResult result;
     int i = 0;
-    git::Commit commit = walker.next(pathspec);
+    git::Commit commit = walker.next(pathspec, canceled);
     while (commit.isValid()) {
       // Add root commits.
       bool root = false;
@@ -602,7 +692,7 @@ private:
       if (i++ >= 64)
         break;
 
-      commit = walker.next(pathspec);
+      commit = walker.next(pathspec, canceled);
     }
 
     result.exhausted = !commit.isValid();
@@ -700,6 +790,11 @@ private:
 
   // Apply a completed background reset on the GUI thread.
   void applyResetResult(ResetResult &&result) {
+    // A running fetch continues the previous rows.
+    ++mFetchGeneration;
+    if (mFetchCanceled)
+      *mFetchCanceled = true;
+
     beginResetModel();
     mParents = std::move(result.parents);
     mRows = std::move(result.rows);
@@ -756,6 +851,12 @@ private:
   QFutureWatcher<git::Diff> mStatus;
 
   QFutureWatcher<ResetResult> mReset;
+
+  // Fetching more rows on another thread.
+  QFutureWatcher<AsyncFetch> mFetch;
+  std::shared_ptr<std::atomic<bool>> mFetchCanceled;
+  int mFetchGeneration = 0;
+  bool mFetching = false;
 
   QString mPathspec;
   git::Reference mRef;
@@ -1437,6 +1538,8 @@ CommitList::CommitList(Index *index, QWidget *parent)
   });
 
   connect(model, &CommitModel::loadingChanged, this, &CommitList::setLoading);
+  connect(model, &CommitModel::fetchingChanged, this,
+          &CommitList::setFetching);
   connect(model, &CommitModel::statusProgress, this,
           &CommitList::statusProgress);
   connect(model, &CommitModel::statusChecked, this,
@@ -2036,7 +2139,20 @@ void CommitList::setLoading(bool loading) {
   }
 
   viewport()->update();
-  emit loadingChanged(loading);
+  updateLoading();
+}
+
+void CommitList::setFetching(bool fetching) {
+  mFetching = fetching;
+  updateLoading();
+}
+
+void CommitList::updateLoading() {
+  bool loading = isLoading();
+  if (loading != mReportedLoading) {
+    mReportedLoading = loading;
+    emit loadingChanged(loading);
+  }
 }
 
 void CommitList::storeSelection() {
@@ -2117,8 +2233,14 @@ QModelIndex CommitList::findCommit(const git::Commit &commit) {
     }
 
     // Load more commits.
-    if (i == model->rowCount() - 1 && model->canFetchMore(QModelIndex()))
-      model->fetchMore(QModelIndex());
+    if (i == model->rowCount() - 1) {
+      if (auto commits = qobject_cast<CommitModel *>(model)) {
+        if (commits->canFetchMoreNow())
+          commits->fetchMoreNow();
+      } else if (model->canFetchMore(QModelIndex())) {
+        model->fetchMore(QModelIndex());
+      }
+    }
   }
 
   return QModelIndex();

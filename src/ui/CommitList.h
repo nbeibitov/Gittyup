@@ -67,7 +67,7 @@ public:
   // Whether a status check and/or walker/row rebuild is currently in
   // flight. See the loadingChanged() signal for a way to wait on this
   // instead of polling it.
-  bool isLoading() const { return mLoading; }
+  bool isLoading() const { return mLoading || mFetching; }
 
 signals:
   void statusChanged(bool dirty);
@@ -99,6 +99,8 @@ private:
   void restoreSelection();
   void updateModel();
   void setLoading(bool loading);
+  void setFetching(bool fetching);
+  void updateLoading();
 
   QModelIndexList sortedIndexes() const;
 
@@ -133,6 +135,8 @@ private:
 
   // Whether the loading indicator should be shown
   bool mLoading{false};
+  bool mFetching{false}; // more rows are loaded in the background
+  bool mReportedLoading{false};
   float mLoadingFadein = 0;
   int mProgress{0};
   QTimer mTimer;

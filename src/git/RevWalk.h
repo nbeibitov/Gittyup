@@ -10,6 +10,7 @@
 #ifndef REVWALK_H
 #define REVWALK_H
 
+#include <atomic>
 #include <QSharedPointer>
 
 struct git_revwalk;
@@ -32,7 +33,10 @@ public:
   bool push(const Reference &ref);
 
   // Return the next commit that matches the given pathspec.
-  Commit next(const QString &pathspec = QString()) const;
+  // The next commit that changes pathspec (any commit if empty). Returns an
+  // invalid commit at the end, or if canceled is set.
+  Commit next(const QString &pathspec = QString(),
+              const std::atomic<bool> *canceled = nullptr) const;
 
 protected:
   RevWalk(git_revwalk *walker);
