@@ -48,7 +48,8 @@ bool RevWalk::push(const Reference &ref) {
   return commit.isValid() ? push(commit) : false;
 }
 
-Commit RevWalk::next(const QString &path) const {
+Commit RevWalk::next(const QString &path,
+                     const std::atomic<bool> *canceled) const {
   git_diff_options diffopts = GIT_DIFF_OPTIONS_INIT;
   diffopts.notify_cb = notify;
 
@@ -63,7 +64,7 @@ Commit RevWalk::next(const QString &path) const {
   }
 
   git_oid id;
-  while (!git_revwalk_next(&id, d.data())) {
+  while (!(canceled && *canceled) && !git_revwalk_next(&id, d.data())) {
     git_commit *commit = nullptr;
     git_commit_lookup(&commit, git_revwalk_repository(d.data()), &id);
     Q_ASSERT(commit);

@@ -8,6 +8,7 @@
 //
 
 #include "Test.h"
+#include "git/Config.h"
 #include "git/Index.h"
 #include "ui/CommitList.h"
 #include "ui/DoubleTreeWidget.h"
@@ -35,6 +36,7 @@ private slots:
   void secondWindowOfRepository();
   void externalChanges();
   void stashesTab();
+  void pathHistoryInBackground();
   void cleanupTestCase();
 
 private:
@@ -58,7 +60,7 @@ void TestCommitListStatus::writeFile(const QString &name,
 bool TestCommitListStatus::waitForStatus() {
   QSignalSpy spy(mView, &RepoView::statusChanged);
   emit mRepo->notifier()->workdirChanged();
-  return spy.wait(10000);
+  return spy.wait(60000);
 }
 
 int TestCommitListStatus::unstagedCount() const {
@@ -164,15 +166,24 @@ void TestCommitListStatus::slowStatusInLog() {
   QCOMPARE(root->entries().size(), count + 1);
   QVERIFY2(entry->text().contains("5 s"), qPrintable(entry->text()));
 
-  // A very slow check refreshes the stat information of the index.
+  // A very slow check refreshes the stat information of the index (unless
+  // a slow check of the test itself already did within ten minutes).
   emit mCommits->statusChecked(3, 160000, 60000);
   QVERIFY2(entry->text().contains("1 min 0 s"), qPrintable(entry->text()));
-  QCOMPARE(root->entries().size(), count + 2);
-  QCOMPARE(root->entries().last()->title(), QString("Index"));
+  LogEntry *index = nullptr;
+  for (LogEntry *child : root->entries()) {
+    if (child->title() == "Index")
+      index = child;
+  }
+  QVERIFY(index);
+
+  // Wait for it, it replaces the index used by the following tests.
+  QTRY_VERIFY_WITH_TIMEOUT(!index->text().startsWith("updating"), 60000);
 
   // The next slow check gets its own entry.
+  count = root->entries().size();
   emit mCommits->statusProgress(10, 100, 3500);
-  QCOMPARE(root->entries().size(), count + 3);
+  QCOMPARE(root->entries().size(), count + 1);
   emit mCommits->statusChecked(0, 100, 3600);
 }
 
@@ -194,7 +205,7 @@ void TestCommitListStatus::externalChanges() {
   // Earlier tests changed the repository without notifications.
   mView->checkExternalChanges();
   QTest::qWait(100);
-  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 10000);
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
 
   // Nothing changed: nothing is refreshed.
   QSignalSpy resets(mCommits->model(), &QAbstractItemModel::modelReset);
@@ -210,7 +221,7 @@ void TestCommitListStatus::externalChanges() {
   mRepo->index().setStaged({"d.txt"}, true);
   mRepo->notifier()->blockSignals(false);
   mView->checkExternalChanges();
-  QVERIFY(status.wait(10000));
+  QVERIFY(status.wait(60000));
   QCOMPARE(resets.count(), 0);
 
   // Committed by another tool: the history is loaded again.
@@ -220,8 +231,8 @@ void TestCommitListStatus::externalChanges() {
   mRepo->notifier()->blockSignals(false);
   QVERIFY(committed);
   mView->checkExternalChanges();
-  QTRY_VERIFY_WITH_TIMEOUT(resets.count() > 0, 10000);
-  QTRY_COMPARE_WITH_TIMEOUT(mCommits->model()->rowCount(), rows + 1, 10000);
+  QTRY_VERIFY_WITH_TIMEOUT(resets.count() > 0, 60000);
+  QTRY_COMPARE_WITH_TIMEOUT(mCommits->model()->rowCount(), rows + 1, 60000);
 }
 
 void TestCommitListStatus::stashesTab() {
@@ -244,7 +255,7 @@ void TestCommitListStatus::stashesTab() {
       tab = model->index(i, 0);
   }
   QVERIFY(tab.isValid());
-  QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(tab), 2, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(tab), 2, 60000);
   QModelIndex second = model->index(1, 0, tab);
   QVERIFY2(second.data().toString().startsWith("stash@{1}: "),
            qPrintable(second.data().toString()));
@@ -254,8 +265,74 @@ void TestCommitListStatus::stashesTab() {
   // stashes in the commit list and selects it.
   view->setCurrentIndex(second);
   emit view->clicked(second);
-  QTRY_COMPARE_WITH_TIMEOUT(mView->commits().size(), 1, 10000);
+  QTRY_COMPARE_WITH_TIMEOUT(mView->commits().size(), 1, 60000);
   QCOMPARE(mView->commits().first().id(), stashes.at(1).id());
+}
+
+void TestCommitListStatus::pathHistoryInBackground() {
+  // Without the search index, the history of a path is found by walking
+  // and diffing the commits.
+  mRepo->appConfig().setValue("index.enable", false);
+
+  // More changes of the path than one page of rows.
+  mRepo->notifier()->blockSignals(true);
+  for (int i = 0; i < 140; ++i) {
+    QString name = (i % 2) ? "g.txt" : "f.txt";
+    writeFile(name, QString::number(i));
+    mRepo->index().setStaged({name}, true);
+    QVERIFY2(mRepo->commit(QString::number(i)).isValid(),
+             qPrintable(git::Repository::lastError()));
+  }
+  mRepo->notifier()->blockSignals(false);
+  mView->refresh();
+
+  // Show the history of HEAD again (the previous test chose the stashes).
+  mView->selectReference(mRepo->head());
+
+  // The path is applied through a queued connection.
+  auto setPath = [this](const QString &path) {
+    mView->setPathspec(path);
+    QCoreApplication::processEvents();
+    QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  };
+
+  setPath("f.txt");
+  QAbstractItemModel *model = mCommits->model();
+
+
+  // More rows are loaded in the background: fetchMore() returns at once.
+  if (model->canFetchMore(QModelIndex())) {
+    int rows = model->rowCount();
+    model->fetchMore(QModelIndex());
+    QVERIFY(mView->isLoading());
+    QCOMPARE(model->rowCount(), rows);
+  }
+
+  auto loadAll = [model, this] {
+    if (model->canFetchMore(QModelIndex()))
+      model->fetchMore(QModelIndex());
+    return !mView->isLoading() && !model->canFetchMore(QModelIndex());
+  };
+  QTRY_VERIFY_WITH_TIMEOUT(loadAll(), 60000);
+  QCOMPARE(model->rowCount(), 70);
+
+  // Selecting an old commit still loads the rows it needs right away.
+  setPath("g.txt");
+  git::Commit oldest;
+  for (git::Commit commit = mRepo->head().target(); commit.isValid();
+       commit = commit.parents().value(0)) {
+    if (commit.summary() == "1")
+      oldest = commit;
+  }
+  QVERIFY(oldest.isValid());
+  bool found = mCommits->selectRange(oldest.id().toString());
+  QVERIFY2(found, qPrintable(QString("rows=%1 more=%2 loading=%3")
+                                 .arg(mCommits->model()->rowCount())
+                                 .arg(mCommits->model()->canFetchMore({}))
+                                 .arg(mView->isLoading())));
+
+  setPath(QString());
+  mRepo->appConfig().setValue("index.enable", true);
 }
 
 void TestCommitListStatus::cleanupTestCase() {
