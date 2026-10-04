@@ -35,6 +35,7 @@
 #include "git/Reference.h"
 #include "git/Remote.h"
 #include "git/RevWalk.h"
+#include "git/Signature.h"
 #include "git/Submodule.h"
 #include "index/Index.h"
 #include "log/LogEntry.h"
@@ -45,7 +46,11 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDateEdit>
+#include <functional>
+#include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFormLayout>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QTextEdit>
@@ -270,6 +275,21 @@ static Hotkey secondParentHotkey = HotkeyManager::registerHotkey(
 
 static Hotkey childHotkey = HotkeyManager::registerHotkey(
     "Alt+Up", "history/child", "History/Child");
+
+static Hotkey olderMergeHotkey = HotkeyManager::registerHotkey(
+    nullptr, "history/olderMerge", "History/Older Merge");
+
+static Hotkey newerMergeHotkey = HotkeyManager::registerHotkey(
+    nullptr, "history/newerMerge", "History/Newer Merge");
+
+static Hotkey olderTagHotkey = HotkeyManager::registerHotkey(
+    nullptr, "history/olderTag", "History/Older Tag");
+
+static Hotkey newerTagHotkey = HotkeyManager::registerHotkey(
+    nullptr, "history/newerTag", "History/Newer Tag");
+
+static Hotkey goToDateHotkey = HotkeyManager::registerHotkey(
+    nullptr, "history/goToDate", "History/Go to Date");
 
 static Hotkey prevTabHotkey = HotkeyManager::registerHotkey(
     QKeySequence::PreviousChild, "window/prevTab", "Window/Show Previous Tab");
@@ -868,6 +888,55 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
       QApplication::beep();
   });
 
+  // Jump to landmarks of the history.
+  historyMenu->addSeparator();
+
+  auto addJump = [this, historyMenu](const QString &text, Hotkey &hotkey,
+                                     std::function<bool(RepoView *)> jump) {
+    QAction *action = historyMenu->addAction(text);
+    hotkey.use(action);
+    action->setEnabled(false);
+    connect(action, &QAction::triggered, [this, jump] {
+      if (!jump(view()))
+        QApplication::beep();
+    });
+    mJumps.append(action);
+  };
+
+  addJump(tr("Older Merge"), olderMergeHotkey,
+          [](RepoView *view) { return view->selectMerge(true); });
+  addJump(tr("Newer Merge"), newerMergeHotkey,
+          [](RepoView *view) { return view->selectMerge(false); });
+  addJump(tr("Older Tag"), olderTagHotkey,
+          [](RepoView *view) { return view->selectTag(true); });
+  addJump(tr("Newer Tag"), newerTagHotkey,
+          [](RepoView *view) { return view->selectTag(false); });
+  addJump(tr("Go to Date..."), goToDateHotkey, [this](RepoView *view) {
+    // Start at the date of the selected commit.
+    QList<git::Commit> commits = view->commits();
+    QDateTime start = commits.isEmpty()
+                          ? QDateTime::currentDateTime()
+                          : commits.first().committer().date().toLocalTime();
+
+    QDialog dialog(window());
+    dialog.setWindowTitle(tr("Go to Date"));
+    QDateEdit *date = new QDateEdit(start.date(), &dialog);
+    date->setCalendarPopup(true);
+    auto buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QFormLayout *layout = new QFormLayout(&dialog);
+    layout->addRow(tr("Last commit on or before:"), date);
+    layout->addRow(buttons);
+    if (dialog.exec() != QDialog::Accepted)
+      return true;
+
+    // The end of the chosen day.
+    QDateTime end(date->date().addDays(1), QTime(0, 0));
+    return view->selectDate(end.addMSecs(-1));
+  });
+
   // Window
   QMenu *windowMenu = addMenu(tr("Window"));
   mPrevTab = windowMenu->addAction(tr("Show Previous Tab"));
@@ -1209,6 +1278,8 @@ void MenuBar::updateHistory() {
   mParent->setEnabled(view != nullptr);
   mSecondParent->setEnabled(view != nullptr);
   mChild->setEnabled(view != nullptr);
+  for (QAction *action : mJumps)
+    action->setEnabled(view != nullptr);
 }
 
 void MenuBar::updateWindow() {

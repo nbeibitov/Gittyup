@@ -34,6 +34,7 @@
 #include <functional>
 
 class CommitList;
+class QDateTime;
 class DetailView;
 class EditorWindow;
 class History;
@@ -90,6 +91,11 @@ public:
 
   // The children of the commit in the commit list.
   QList<git::Commit> childCommits(const git::Commit &commit) const;
+
+  // Go to the next older or newer merge or tagged commit, or to a date.
+  bool selectMerge(bool older);
+  bool selectTag(bool older);
+  bool selectDate(const QDateTime &date);
   void selectFirstCommit();
 
   git::Repository repo() const { return mRepo; }

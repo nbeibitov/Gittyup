@@ -14,6 +14,8 @@
 #include "git/Id.h"
 #include <QListView>
 #include <QSet>
+
+class QDateTime;
 #include <QTimer>
 
 class Index;
@@ -75,6 +77,15 @@ public:
   // Whether the commit is on the line of first parents through the single
   // selected commit, among the loaded rows, which the graph highlights.
   bool isOnSelectedLine(const git::Commit &commit) const;
+
+  // Select the next older or newer merge or tagged commit from the
+  // selection, loading more rows for older ones. Return false if there is
+  // none.
+  enum class Landmark { Merge, Tag };
+  bool selectLandmark(Landmark landmark, bool older);
+
+  // Select the newest commit that was committed at or before the date.
+  bool selectDate(const QDateTime &date);
   bool selectRange(const QString &range, const QString &file = QString(),
                    bool spontaneous = false);
   void suppressResetWalker(bool suppress);

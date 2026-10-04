@@ -3572,6 +3572,18 @@ QList<git::Commit> RepoView::childCommits(const git::Commit &commit) const {
   return mCommits->childCommits(commit);
 }
 
+bool RepoView::selectMerge(bool older) {
+  return mCommits->selectLandmark(CommitList::Landmark::Merge, older);
+}
+
+bool RepoView::selectTag(bool older) {
+  return mCommits->selectLandmark(CommitList::Landmark::Tag, older);
+}
+
+bool RepoView::selectDate(const QDateTime &date) {
+  return mCommits->selectDate(date);
+}
+
 void RepoView::notifyReferenceUpdated(const QString &name) {
   emit mRepo.notifier()->referenceUpdated(mRepo.lookupRef(name));
 }

@@ -2440,6 +2440,73 @@ void CommitList::selectIndexes(const QItemSelection &selection,
     scrollTo(indexes.first());
 }
 
+namespace {
+
+// Load more rows of the model. Returns false if there are no more.
+bool fetchMoreRows(QAbstractItemModel *model) {
+  int count = model->rowCount();
+  if (auto commits = qobject_cast<CommitModel *>(model)) {
+    if (commits->canFetchMoreNow())
+      commits->fetchMoreNow();
+  } else if (model->canFetchMore(QModelIndex())) {
+    model->fetchMore(QModelIndex());
+  }
+  return model->rowCount() > count;
+}
+
+} // namespace
+
+bool CommitList::selectLandmark(Landmark landmark, bool older) {
+  QModelIndex current = currentRow(selectionModel());
+  QAbstractItemModel *model = this->model();
+  int start = current.isValid() ? current.row() : 0;
+
+  // The commits that tags point to.
+  QSet<git::Id> tagged;
+  if (landmark == Landmark::Tag) {
+    git::Repository repo = RepoView::parentView(this)->repo();
+    for (const git::TagRef &tag : repo.tags()) {
+      if (git::Commit commit = tag.target())
+        tagged.insert(commit.id());
+    }
+  }
+
+  int step = older ? 1 : -1;
+  for (int row = start + step; row >= 0; row += step) {
+    if (row >= model->rowCount() && !(older && fetchMoreRows(model)))
+      return false;
+
+    QModelIndex index = model->index(row, 0);
+    git::Commit commit = index.data(CommitRole).value<git::Commit>();
+    if (!commit.isValid())
+      continue;
+
+    bool found = (landmark == Landmark::Merge) ? commit.isMerge()
+                                               : tagged.contains(commit.id());
+    if (found) {
+      selectIndexes(QItemSelection(index, index), QString(), true);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool CommitList::selectDate(const QDateTime &date) {
+  QAbstractItemModel *model = this->model();
+  for (int row = 0;; ++row) {
+    if (row >= model->rowCount() && !fetchMoreRows(model))
+      return false;
+
+    QModelIndex index = model->index(row, 0);
+    git::Commit commit = index.data(CommitRole).value<git::Commit>();
+    if (commit.isValid() && commit.committer().date() <= date) {
+      selectIndexes(QItemSelection(index, index), QString(), true);
+      return true;
+    }
+  }
+}
+
 bool CommitList::isOnSelectedLine(const git::Commit &commit) const {
   return commit.isValid() && mLine.contains(commit.id());
 }

@@ -11,6 +11,8 @@
 #include "git/Commit.h"
 #include "git/Index.h"
 #include "git/Reference.h"
+#include "git/Signature.h"
+#include "git/TagRef.h"
 #include "ui/CommitList.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
@@ -30,6 +32,7 @@ private slots:
   void uncommittedChanges();
   void mergeBase();
   void selectedLine();
+  void landmarks();
 
 private:
   git::Commit commitFile(const QString &name, const QString &content);
@@ -194,6 +197,27 @@ void TestHistoryNavigation::selectedLine() {
   select(mB);
   QVERIFY(mList->isOnSelectedLine(mM));
   QVERIFY(mList->isOnSelectedLine(mA));
+}
+
+// Jumps to merges, tags and dates.
+void TestHistoryNavigation::landmarks() {
+  select(mA);
+  QVERIFY(mView->selectMerge(false));
+  QCOMPARE(selected(), mM);
+  QVERIFY(!mView->selectMerge(false));
+  QVERIFY(!mView->selectMerge(true));
+
+  // Older tags load more rows if needed.
+  QVERIFY(mRepo.createTag(mC, "v1").isValid());
+  select(mM);
+  QVERIFY(mView->selectTag(true));
+  QCOMPARE(selected(), mC);
+  QVERIFY(!mView->selectTag(true));
+
+  // The newest commit at or before the date.
+  QVERIFY(mView->selectDate(QDateTime::currentDateTime().addDays(1)));
+  QCOMPARE(selected(), mM);
+  QVERIFY(!mView->selectDate(mA.committer().date().addDays(-1)));
 }
 
 TEST_MAIN(TestHistoryNavigation)
