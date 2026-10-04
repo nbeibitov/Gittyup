@@ -1,3 +1,6 @@
 # configure_file() writes LICENSE.md with LF line endings. Check it out the
 # same way, otherwise every configure marks it as modified on Windows.
 LICENSE.md text eol=lf
+
+# Patches for dependencies must keep the line endings of the patched files.
+*.patch -text

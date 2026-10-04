@@ -1,0 +1,57 @@
+From: Beybitov Nurzhan <nbeibitov@gmail.com>
+Subject: [PATCH] commit_graph: release replaced files and keep current ones
+
+git_commit_graph_refresh() returned early, without any check, for a file
+that was not requested since the last refresh, so a replaced file stayed
+mapped. It also asks for a re-check without freeing a file that did not
+change, and git_commit_graph_get_file() then opened the file again and
+overwrote the pointer, which leaked the mapping on every refresh of the
+object database. On Windows a mapped file can neither be replaced nor
+removed, e.g. by git gc.
+
+Always check a loaded file on refresh, and keep a current file instead of
+opening it again.
+---
+diff --git a/src/libgit2/commit_graph.c b/src/libgit2/commit_graph.c
+index d2e403ec3..26c21bf48 100644
+--- a/src/libgit2/commit_graph.c
++++ b/src/libgit2/commit_graph.c
+@@ -457,6 +457,20 @@ int git_commit_graph_get_file(
+ 		/* We only check once, no matter the result. */
+ 		cgraph->checked = 1;
+ 
++		/*
++		 * Keep a file that is still current. Opening it again would leak
++		 * its mapping, which also keeps the file from being replaced or
++		 * removed on Windows.
++		 */
++		if (cgraph->file) {
++			if (!git_commit_graph_file_needs_refresh(cgraph->file,
++					git_str_cstr(&cgraph->filename)))
++				goto done;
++
++			git_commit_graph_file_free(cgraph->file);
++			cgraph->file = NULL;
++		}
++
+ 		/* Best effort */
+ 		error = git_commit_graph_file_open(&result,
+ 			git_str_cstr(&cgraph->filename), cgraph->oid_type);
+@@ -466,6 +480,7 @@ int git_commit_graph_get_file(
+ 
+ 		cgraph->file = result;
+ 	}
++done:
+ 	if (!cgraph->file)
+ 		return GIT_ENOTFOUND;
+ 
+@@ -475,9 +490,6 @@ int git_commit_graph_get_file(
+ 
+ void git_commit_graph_refresh(git_commit_graph *cgraph)
+ {
+-	if (!cgraph->checked)
+-		return;
+-
+ 	if (cgraph->file
+ 	    && git_commit_graph_file_needs_refresh(cgraph->file, git_str_cstr(&cgraph->filename))) {
+ 		/* We just free the commit graph. The next time it is requested, it will be
