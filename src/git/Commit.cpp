@@ -8,12 +8,14 @@
 //
 
 #include "Commit.h"
+#include "Config.h"
 #include "Diff.h"
 #include "Patch.h"
 #include "Reference.h"
 #include "Repository.h"
 #include "RevWalk.h"
 #include "Signature.h"
+#include "Signing.h"
 #include "TagRef.h"
 #include "Tree.h"
 #include "git2/annotated_commit.h"
@@ -265,8 +267,34 @@ bool Commit::amend(const Signature &author, const Signature &committer,
                    const QString &commitMessage, const Tree &tree) const {
   Repository repo = this->repo();
   git_oid oid;
-  int error = git_commit_amend(&oid, *this, "HEAD", &*author, &*committer, NULL,
-                               commitMessage.toUtf8(), tree);
+  int error = 0;
+  Config config = repo.gitConfig();
+  if (Signing::isEnabled(config)) {
+    // Replace the commit like git_commit_amend(), but signed.
+    QVector<git_commit *> parents;
+    for (unsigned int i = 0; i < git_commit_parentcount(*this); ++i) {
+      git_commit *parent = nullptr;
+      if (!git_commit_parent(&parent, *this, i))
+        parents.append(parent);
+    }
+
+    git_tree *original = nullptr;
+    const git_tree *newTree = tree;
+    if (!newTree && !git_commit_tree(&original, *this))
+      newTree = original;
+
+    error = Signing::createCommit(&oid, repo, config, &*author, &*committer,
+                                  commitMessage, newTree, parents.size(),
+                                  (const git_commit **)parents.data(),
+                                  "amend");
+    git_tree_free(original);
+    for (git_commit *parent : parents)
+      git_commit_free(parent);
+  } else {
+    error = git_commit_amend(&oid, *this, "HEAD", &*author, &*committer, NULL,
+                             commitMessage.toUtf8(), tree);
+  }
+
   emit repo.notifier()->referenceUpdated(repo.head());
   return !error;
 }

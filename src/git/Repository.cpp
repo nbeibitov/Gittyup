@@ -25,6 +25,7 @@
 #include "Remote.h"
 #include "RevWalk.h"
 #include "Signature.h"
+#include "Signing.h"
 #include "Submodule.h"
 #include "TagRef.h"
 #include "Tree.h"
@@ -680,11 +681,18 @@ Commit Repository::commit(const Signature &author, const Signature &committer,
   if (mergeHead.isValid())
     parents.append(mergeHead.commit());
 
-  // Create the commit.
+  // Create the commit, signed if commit.gpgSign is set.
   git_oid id;
-  if (git_commit_create(&id, d->repo, "HEAD", author, committer, 0,
-                        message.toUtf8(), tree, parents.size(),
-                        (const git_commit **)parents.data()))
+  Config config = gitConfig();
+  int error =
+      Signing::isEnabled(config)
+          ? Signing::createCommit(&id, d->repo, config, author, committer,
+                                  message, tree, parents.size(),
+                                  (const git_commit **)parents.data())
+          : git_commit_create(&id, d->repo, "HEAD", author, committer, 0,
+                              message.toUtf8(), tree, parents.size(),
+                              (const git_commit **)parents.data());
+  if (error)
     return Commit();
 
   // Cleanup merge state.

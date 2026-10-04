@@ -126,6 +126,7 @@ test(NAME commitListStatus)
 test(NAME commitGraph)
 test(NAME indexRefresh)
 test(NAME hook)
+test(NAME signing)
 
 # Test case not compatible with Windows
 if(NOT WIN32)
