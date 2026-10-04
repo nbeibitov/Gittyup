@@ -90,6 +90,17 @@ const qint64 kSlowStatus = 3000;
 const qint64 kRefreshIndexStatus = 10000;
 const qint64 kIndexRefreshInterval = 10 * 60 * 1000;
 
+// Whether a value of pull.rebase or branch.<name>.rebase asks for a rebase.
+// 'merges' and 'interactive' are done as a plain rebase.
+bool isRebase(const QString &value, bool defaultValue) {
+  QString lower = value.trimmed().toLower();
+  if (lower.isEmpty())
+    return defaultValue;
+  if (QStringList({"false", "no", "off", "0"}).contains(lower))
+    return false;
+  return true; // true, yes, on, 1, merges, m, interactive, i
+}
+
 QString duration(qint64 msecs) {
   qint64 secs = msecs / 1000;
   if (secs < 60)
@@ -1337,14 +1348,16 @@ void RepoView::pull(MergeFlags flags, const git::Remote &rmt, bool tags,
             // Merge the upstream of the HEAD branch.
             MergeFlags mf = flags;
             if (flags == Default) {
-              // Read pull.rebase from config.
+              // Read pull.rebase from config. It can also be 'merges' or
+              // 'interactive', which a boolean can't be read from.
               git::Config config = mRepo.gitConfig();
-              bool rebase = config.value<bool>("pull.rebase");
+              bool rebase =
+                  isRebase(config.value<QString>("pull.rebase"), false);
 
               // Read branch.<name>.rebase from config.
               if (git::Branch head = mRepo.head()) {
                 QString key = QString("branch.%1.rebase").arg(head.name());
-                rebase = config.value<bool>(key, rebase);
+                rebase = isRebase(config.value<QString>(key), rebase);
               }
 
               mf = rebase ? Rebase : Merge;
