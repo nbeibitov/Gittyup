@@ -11,6 +11,7 @@ add_library(
   Diff.cpp
   Filter.cpp
   FilterList.cpp
+  Hook.cpp
   Hunk.cpp
   Id.cpp
   Index.cpp

@@ -42,6 +42,7 @@
 #include "git/Command.h"
 #include "git/CommitGraph.h"
 #include "git/Config.h"
+#include "git/Hook.h"
 #include "git/Index.h"
 #include "git/Rebase.h"
 #include "git/RebaseState.h"
@@ -60,10 +61,12 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QEventLoop>
 #include <QLocale>
 #include <QMessageBox>
 #include <QtNetwork>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QShortcut>
 #include <QTimeLine>
@@ -89,6 +92,13 @@ const qint64 kSlowStatus = 3000;
 // but not more often than every kIndexRefreshInterval.
 const qint64 kRefreshIndexStatus = 10000;
 const qint64 kIndexRefreshInterval = 10 * 60 * 1000;
+
+// Hook output for the log, without the colors of terminals.
+QString hookOutput(const QString &output) {
+  QString text = output;
+  text.remove(QRegularExpression("\x1b\\[[0-9;]*[A-Za-z]"));
+  return text.toHtmlEscaped().replace('\n', "<br>");
+}
 
 // Whether a value of pull.rebase or branch.<name>.rebase asks for a rebase.
 // 'merges' and 'interactive' are done as a plain rebase.
@@ -1558,7 +1568,9 @@ void RepoView::merge(MergeFlags flags, const git::AnnotatedCommit &upstream,
     connect(dialog, &QDialog::accepted, this,
             [this, dialog, upstream, parent, suspended, callback] {
               resumeLogTimer(suspended);
-              if (commit(dialog->message(), upstream, parent) && callback)
+              if (commit(dialog->message(), upstream, parent, false,
+                         Hooks::Merge) &&
+                  callback)
                 callback();
             });
 
@@ -1567,7 +1579,7 @@ void RepoView::merge(MergeFlags flags, const git::AnnotatedCommit &upstream,
   }
 
   // Automatically commit with the default message.
-  if (commit(msg, upstream, parent) && callback)
+  if (commit(msg, upstream, parent, false, Hooks::Merge) && callback)
     callback();
 }
 
@@ -2340,19 +2352,110 @@ void RepoView::push(const git::Remote &rmt, const git::Reference &src,
 
 bool RepoView::commit(const QString &message,
                       const git::AnnotatedCommit &upstream, LogEntry *parent,
-                      bool force) {
+                      bool force, Hooks hooks) {
 
   bool fakeSignature = false;
   git::Signature signature = mRepo.defaultSignature(
       &fakeSignature, mDetails->overrideUser(), mDetails->overrideEmail());
   return commit(signature, signature, message, upstream, parent, force,
-                fakeSignature);
+                fakeSignature, hooks);
+}
+
+bool RepoView::runHook(const QString &name, const QStringList &args,
+                       LogEntry *entry, const QProcessEnvironment &env) {
+  QString dir = mRepo.dir().path();
+  if (git::Hook::path(dir, name).isEmpty())
+    return true;
+
+  QFutureWatcher<git::Hook::Result> watcher;
+  QEventLoop loop;
+  connect(&watcher, &QFutureWatcher<git::Hook::Result>::finished, &loop,
+          &QEventLoop::quit);
+
+  mRunningHook = true;
+  watcher.setFuture(QtConcurrent::run(
+      [dir, name, args, env] { return git::Hook::run(dir, name, args, {}, env); }));
+  loop.exec();
+  mRunningHook = false;
+
+  git::Hook::Result result = watcher.result();
+  if (!result.error.isEmpty()) {
+    entry->addEntry(LogEntry::Error, result.error);
+    return false;
+  }
+
+  if (result.exitCode) {
+    LogEntry *error = entry->addEntry(
+        LogEntry::Error,
+        tr("The %1 hook failed with exit code %2.").arg(name).arg(result.exitCode));
+    if (!result.output.isEmpty())
+      error->addEntry(LogEntry::Hint, hookOutput(result.output));
+    return false;
+  }
+
+  if (!result.output.isEmpty())
+    entry->addEntry(hookOutput(result.output), name);
+
+  return true;
+}
+
+bool RepoView::runPreCommitHooks(Hooks hooks, const QStringList &source,
+                                 QString &message, LogEntry *entry) {
+  // Like git, which also sets GIT_INDEX_FILE for the hooks of commits.
+  QDir dir = mRepo.dir();
+  QProcessEnvironment env;
+  env.insert("GIT_EDITOR", ":");
+  env.insert("GIT_INDEX_FILE", QDir::toNativeSeparators(dir.filePath("index")));
+
+  QString pre = (hooks == Hooks::Merge) ? "pre-merge-commit" : "pre-commit";
+  if (!runHook(pre, {}, entry, env))
+    return false;
+
+  // The hook may have staged changes, e.g. fixes of a formatter.
+  mRepo.index().read();
+
+  QString gitDir = dir.path();
+  if (git::Hook::path(gitDir, "prepare-commit-msg").isEmpty() &&
+      git::Hook::path(gitDir, "commit-msg").isEmpty())
+    return true;
+
+  // The message hooks read and change the message in this file.
+  QString path = dir.filePath("COMMIT_EDITMSG");
+  QFile file(path);
+  if (!file.open(QFile::WriteOnly | QFile::Truncate) ||
+      file.write(message.toUtf8()) < 0) {
+    entry->addEntry(LogEntry::Error,
+                    tr("Unable to write the message for the commit hooks."));
+    return false;
+  }
+  file.close();
+
+  QString native = QDir::toNativeSeparators(path);
+  if (!runHook("prepare-commit-msg", QStringList({native}) + source, entry,
+               env) ||
+      !runHook("commit-msg", {native}, entry, env))
+    return false;
+
+  if (!file.open(QFile::ReadOnly)) {
+    entry->addEntry(LogEntry::Error,
+                    tr("Unable to read the message of the commit hooks."));
+    return false;
+  }
+
+  message = QString::fromUtf8(file.readAll());
+  return true;
 }
 
 bool RepoView::commit(const git::Signature &author,
-                      const git::Signature &commiter, const QString &message,
+                      const git::Signature &commiter, const QString &text,
                       const git::AnnotatedCommit &upstream, LogEntry *parent,
-                      bool force, bool fakeSignature) {
+                      bool force, bool fakeSignature, Hooks hooks) {
+  // A commit started while a hook of another one runs.
+  if (mRunningHook)
+    return false;
+
+  QString message = text;
+
   // Check for detached head.
   git::Reference head = mRepo.head();
   if (!force && head.isValid() && !head.isLocalBranch()) {
@@ -2370,16 +2473,20 @@ bool RepoView::commit(const git::Signature &author,
     QPushButton *accept =
         dialog->addButton(tr("Commit"), QMessageBox::AcceptRole);
     connect(accept, &QPushButton::clicked, this,
-            [this, message, upstream, parent] {
-              this->commit(message, upstream, parent, true);
+            [this, message, upstream, parent, hooks] {
+              this->commit(message, upstream, parent, true, hooks);
             });
 
     dialog->open();
     return false;
   }
 
-  QString text = tr("<i>no commit</i>");
-  LogEntry *entry = addLogEntry(text, tr("Commit"), parent);
+  LogEntry *entry = addLogEntry(tr("<i>no commit</i>"), tr("Commit"), parent);
+
+  if (hooks != Hooks::None &&
+      !runPreCommitHooks(hooks, {hooks == Hooks::Merge ? "merge" : "message"},
+                         message, entry))
+    return false;
 
   git::Commit commit = mRepo.commit(author, commiter, message, upstream);
 
@@ -2387,6 +2494,11 @@ bool RepoView::commit(const git::Signature &author,
     error(entry, tr("commit"));
     return false;
   }
+
+  if (hooks == Hooks::Commit)
+    runHook("post-commit", {}, entry);
+  else if (hooks == Hooks::Merge)
+    runHook("post-merge", {"0"}, entry); // not a squash
 
   // Log commit message.
   entry->setText(msg(commit));
@@ -2730,16 +2842,27 @@ void RepoView::amend(const git::Commit &commit, const git::Signature &author,
 
   QString title = tr("Amend");
 
-  if (!mRepo.amend(commit, author, committer, commitMessage)) {
-    error(addLogEntry(tr("Amending commit %1").arg(commit.link()), title),
-          tr("amend"), head.name());
+  // Like 'git commit --amend'.
+  if (mRunningHook)
+    return;
+  LogEntry *entry =
+      addLogEntry(tr("Amending commit %1").arg(commit.link()), title);
+  QString message = commitMessage;
+  if (!runPreCommitHooks(Hooks::Commit, {"commit", commit.id().toString()},
+                         message, entry))
+    return;
+
+  if (!mRepo.amend(commit, author, committer, message)) {
+    error(entry, tr("amend"), head.name());
   } else {
     head = mRepo.head();
     Q_ASSERT(head.isValid());
 
     QString text =
         tr("%1 to %2", "update ref").arg(head.name(), head.target().link());
-    addLogEntry(text, title);
+    entry->setText(text);
+
+    runHook("post-commit", {}, entry);
   }
 }
 

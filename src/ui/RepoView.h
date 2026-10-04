@@ -262,14 +262,19 @@ public:
             bool force = false, bool tags = false);
 
   // commit
+  // The hooks that run around a commit, like 'git commit' and 'git merge'
+  // run them.
+  enum class Hooks { None, Commit, Merge };
+
   bool commit(const git::Signature &author, const git::Signature &commiter,
               const QString &message,
               const git::AnnotatedCommit &upstream = git::AnnotatedCommit(),
               LogEntry *parent = nullptr, bool force = false,
-              bool fakeSignature = false);
+              bool fakeSignature = false, Hooks hooks = Hooks::None);
   bool commit(const QString &message,
               const git::AnnotatedCommit &upstream = git::AnnotatedCommit(),
-              LogEntry *parent = nullptr, bool force = false);
+              LogEntry *parent = nullptr, bool force = false,
+              Hooks hooks = Hooks::Commit);
   void amendCommit();
 
   // checkout
@@ -416,6 +421,17 @@ private:
 
   void notifyReferenceUpdated(const QString &name);
 
+  // Run a hook of the repository on another thread while the interface
+  // keeps responding. Its output is added to entry. Returns false if it
+  // failed.
+  bool runHook(const QString &name, const QStringList &args, LogEntry *entry,
+               const QProcessEnvironment &env = QProcessEnvironment());
+
+  // Run the hooks before a commit, which may change the index and message.
+  // source are the arguments of prepare-commit-msg after the message file.
+  bool runPreCommitHooks(Hooks hooks, const QStringList &source,
+                         QString &message, LogEntry *entry);
+
   void startLogTimer();
   bool suspendLogTimer();
   void resumeLogTimer(bool suspended = true);
@@ -480,6 +496,9 @@ private:
   LogEntry *mIndexRefreshEntry = nullptr;
   std::shared_ptr<std::atomic<bool>> mIndexRefreshCanceled;
   bool mReloadCommitGraph = false;
+
+  // A hook runs while the interface keeps responding.
+  bool mRunningHook = false;
 
   QList<QWidget *> mTrackedWindows;
 

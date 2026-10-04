@@ -12,6 +12,7 @@
 #include "conf/Settings.h"
 #include "cred/CredentialHelper.h"
 #include "git/Command.h"
+#include "git/Hook.h"
 #include "git/Id.h"
 #include "git/RevWalk.h"
 #include "git2/sys/errors.h"
@@ -204,16 +205,19 @@ bool RemoteCallbacks::negotiation(
   if (!mRepo.isValid())
     return true;
 
-  QDir dir = mRepo.dir();
-  if (!dir.exists("hooks/pre-push"))
+  // Honors core.hooksPath and the common directory of linked worktrees.
+  QString hook = git::Hook::path(mRepo.dir().path(), "pre-push");
+  if (hook.isEmpty())
     return true;
 
+#ifdef Q_OS_WIN
   QString bash = git::Command::bashPath();
   if (bash.isEmpty()) {
     QString error = tr("failed to execute pre-push hook: bash not found");
     git_error_set_str(GIT_ERROR_NET, error.toUtf8());
     return false;
   }
+#endif
 
   QEventLoop loop;
   QProcess process;
@@ -230,8 +234,13 @@ bool RemoteCallbacks::negotiation(
                        process.terminate();
                    });
 
-  // Start process.
-  process.start(bash, {dir.filePath("hooks/pre-push"), mName, mUrl});
+  // Start process. The shell of Git for Windows runs scripts with the
+  // interpreter of their first line, like git does.
+#ifdef Q_OS_WIN
+  process.start(bash, {"-c", "exec \"$0\" \"$@\"", hook, mName, mUrl});
+#else
+  process.start(hook, {mName, mUrl});
+#endif
 
   // Write updates.
   QTextStream out(&process);

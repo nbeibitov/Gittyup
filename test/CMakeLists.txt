@@ -125,6 +125,7 @@ test(NAME SpellChecker)
 test(NAME commitListStatus)
 test(NAME commitGraph)
 test(NAME indexRefresh)
+test(NAME hook)
 
 # Test case not compatible with Windows
 if(NOT WIN32)
