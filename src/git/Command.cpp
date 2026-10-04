@@ -16,17 +16,20 @@
 
 namespace git {
 
+QString Command::gitPath() {
+  QString git = QStandardPaths::findExecutable("git");
+#ifdef Q_OS_WIN
+  if (git.isEmpty() && QFileInfo::exists("C:/Program Files/Git/cmd/git.exe"))
+    git = "C:/Program Files/Git/cmd/git.exe";
+#endif
+  return git;
+}
+
 QString Command::bashPath() {
   QStringList paths;
 
 #ifdef Q_OS_WIN
-  QString git = QStandardPaths::findExecutable("git");
-  if (git.isEmpty()) {
-    QFileInfo info("C:/Program Files/git/cmd/git.exe");
-    if (info.exists())
-      git = info.path();
-  }
-
+  QString git = gitPath();
   if (!git.isEmpty()) {
     QDir dir = QFileInfo(git).dir();
     dir.cdUp();

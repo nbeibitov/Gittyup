@@ -8,6 +8,7 @@
 //
 
 #include "CommitGraph.h"
+#include "Command.h"
 #include "Config.h"
 #include "git2.h"
 #include "git2/sys/commit_graph.h"
@@ -16,6 +17,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <memory>
 #include <vector>
 
@@ -24,11 +26,15 @@ namespace git {
 namespace {
 
 const QString kFile = "commit-graph";
+const QString kChain = "commit-graphs/commit-graph-chain";
 const QString kLock = "commit-graph.lock";
 const QString kStaleSuffix = ".stale";
 
 // A lock older than this was left behind by a crashed writer.
 const int kLockTimeout = 3600;
+
+// Large histories take minutes.
+const int kGitTimeout = 30 * 60 * 1000;
 
 QString lastError(const QString &fallback) {
   const git_error *error = git_error_last();
@@ -47,13 +53,91 @@ QString infoDir(git_repository *repo) {
   return QDir(objects).filePath("info");
 }
 
+// git writes read-only files, which can't be removed on Windows. Fails while
+// the file is still mapped.
+bool removeFile(const QString &path) {
+  QFile::setPermissions(path,
+                        QFile::permissions(path) | QFileDevice::WriteOwner);
+  return QFile::remove(path);
+}
+
 // Replaced files that were still mapped when they were replaced.
 void removeStale(const QString &info) {
   QDir dir(info);
   const QStringList names =
       dir.entryList({kFile + "-*" + kStaleSuffix}, QDir::Files);
   for (const QString &name : names)
-    dir.remove(name);
+    removeFile(dir.filePath(name));
+}
+
+QString infoDir(const QString &gitDir) {
+  git_repository *repo = nullptr;
+  if (git_repository_open_ext(&repo, gitDir.toUtf8(),
+                              GIT_REPOSITORY_OPEN_NO_SEARCH, nullptr))
+    return QString();
+
+  QString info = infoDir(repo);
+  git_repository_free(repo);
+  return info;
+}
+
+bool hasChain(const QString &info) {
+  return QFile::exists(QDir(info).filePath(kChain));
+}
+
+// A memory mapped file can't be replaced or deleted on Windows, but it can be
+// renamed. Move the file aside, it is removed once it is unmapped. Returns
+// the new name, or an empty string if there is no file or it can't be moved.
+QString moveAside(const QString &info) {
+  QDir dir(info);
+  QString target = dir.filePath(kFile);
+  if (!QFile::exists(target))
+    return QString();
+
+  QString stale = dir.filePath(QString("%1-%2%3")
+                                   .arg(kFile)
+                                   .arg(QDateTime::currentMSecsSinceEpoch())
+                                   .arg(kStaleSuffix));
+  return QFile::rename(target, stale) ? stale : QString();
+}
+
+bool writeWithGit(const QString &git, const QString &gitDir,
+                  const QString &info, QString *error) {
+  auto fail = [error](const QString &text) {
+    if (error)
+      *error = text;
+    return false;
+  };
+
+  // git can't replace a file that is mapped.
+  QString target = QDir(info).filePath(kFile);
+  QString stale = moveAside(info);
+  if (QFile::exists(target))
+    return fail(QObject::tr("Unable to replace the commit-graph."));
+
+  QProcess process;
+  process.setStandardInputFile(QProcess::nullDevice());
+  process.start(git, {"--git-dir=" + gitDir, "commit-graph", "write",
+                      "--reachable", "--no-progress"});
+  bool finished = process.waitForFinished(kGitTimeout);
+  if (!finished)
+    process.kill();
+
+  if (!finished || process.exitStatus() != QProcess::NormalExit ||
+      process.exitCode() != 0) {
+    if (!stale.isEmpty() && !QFile::exists(target))
+      QFile::rename(stale, target);
+
+    QString text = QString::fromUtf8(process.readAllStandardError()).trimmed();
+    if (text.isEmpty())
+      text = process.errorString();
+    return fail(QObject::tr("git commit-graph write failed: %1").arg(text));
+  }
+
+  if (!stale.isEmpty())
+    removeFile(stale);
+
+  return true;
 }
 
 qint64 modified(const QString &path) {
@@ -253,7 +337,7 @@ bool CommitGraph::isOutdated(const Repository &repo, int minAge) {
     return false;
 
   QString file = path(repo);
-  if (file.isEmpty())
+  if (file.isEmpty() || hasChain(QFileInfo(file).path()))
     return false;
 
   qint64 graph = modified(file);
@@ -291,7 +375,9 @@ bool CommitGraph::write(const QString &gitDir, QString *error) {
 
   removeStale(info);
 
-  // Take the lock git uses for writing the commit-graph.
+  if (hasChain(info))
+    return fail(QObject::tr("git maintains a split commit-graph."));
+
   QDir dir(info);
   QString lockPath = dir.filePath(kLock);
   qint64 now = QDateTime::currentSecsSinceEpoch();
@@ -299,6 +385,11 @@ bool CommitGraph::write(const QString &gitDir, QString *error) {
   if (locked && now - locked > kLockTimeout)
     QFile::remove(lockPath);
 
+  QString git = Command::gitPath();
+  if (!git.isEmpty())
+    return writeWithGit(git, gitDir, info, error);
+
+  // Take the lock git uses for writing the commit-graph.
   QFile lock(lockPath);
   if (!lock.open(QIODevice::WriteOnly | QIODevice::NewOnly))
     return fail(QObject::tr("The commit-graph is locked by another process."));
@@ -353,18 +444,10 @@ bool CommitGraph::write(const QString &gitDir, QString *error) {
   if (!written || lock.error() != QFileDevice::NoError)
     return fail(QObject::tr("Unable to write the commit-graph."));
 
-  // A memory mapped file can't be replaced or deleted on Windows, but it can
-  // be renamed. Move the old file aside and remove it once it is unmapped.
   QString target = dir.filePath(kFile);
-  QString stale;
-  if (QFile::exists(target)) {
-    stale = dir.filePath(QString("%1-%2%3")
-                             .arg(kFile)
-                             .arg(QDateTime::currentMSecsSinceEpoch())
-                             .arg(kStaleSuffix));
-    if (!QFile::rename(target, stale))
-      return fail(QObject::tr("Unable to replace the commit-graph."));
-  }
+  QString stale = moveAside(info);
+  if (QFile::exists(target))
+    return fail(QObject::tr("Unable to replace the commit-graph."));
 
   if (!QFile::rename(lockPath, target)) {
     if (!stale.isEmpty())
@@ -374,8 +457,21 @@ bool CommitGraph::write(const QString &gitDir, QString *error) {
 
   done = true;
   if (!stale.isEmpty())
-    QFile::remove(stale); // fails while it is still mapped
+    removeFile(stale);
 
+  return true;
+}
+
+bool CommitGraph::removeShadow(const QString &gitDir) {
+  QString info = infoDir(gitDir);
+  if (info.isEmpty() || !hasChain(info))
+    return false;
+
+  QString stale = moveAside(info);
+  if (stale.isEmpty())
+    return false;
+
+  removeFile(stale);
   return true;
 }
 

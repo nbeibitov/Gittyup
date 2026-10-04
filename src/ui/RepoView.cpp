@@ -39,6 +39,7 @@
 #include "dialogs/SettingsDialog.h"
 #include "dialogs/TagDialog.h"
 #include "editor/TextEditor.h"
+#include "git/Command.h"
 #include "git/CommitGraph.h"
 #include "git/Config.h"
 #include "git/Index.h"
@@ -1713,6 +1714,9 @@ void RepoView::updateCommitGraph() {
   QString dir = mRepo.dir().path();
   mCommitGraphTime.start();
   mCommitGraph.setFuture(QtConcurrent::run([dir, path, outdated] {
+    // Earlier versions wrote a file that hides the split chain from git.
+    git::CommitGraph::removeShadow(dir);
+
     if (!outdated && !git::CommitGraph::isCorrupt(path))
       return false;
 
@@ -1758,11 +1762,7 @@ void RepoView::runGitRebase(const QString &option) {
   LogEntry *entry =
       addLogEntry(QString("git rebase %1").arg(option), tr("Rebase"));
 
-  QString git = QStandardPaths::findExecutable("git");
-#ifdef Q_OS_WIN
-  if (git.isEmpty() && QFileInfo::exists("C:/Program Files/Git/cmd/git.exe"))
-    git = "C:/Program Files/Git/cmd/git.exe";
-#endif
+  QString git = git::Command::gitPath();
   if (git.isEmpty()) {
     entry->addEntry(LogEntry::Error,
                     tr("Git was not found on the PATH. It is needed for "

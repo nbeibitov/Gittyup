@@ -15,6 +15,7 @@
 #include "git/Reference.h"
 #include "git/RevWalk.h"
 #include "git2/commit.h"
+#include "git2/errors.h"
 #include "git2/refs.h"
 #include "git2/revwalk.h"
 #include "git2/signature.h"
@@ -24,6 +25,10 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <vector>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 using namespace git;
 
@@ -39,11 +44,17 @@ private slots:
   void outdated();
   void locked();
   void mergesHaveValidGenerations();
+  void readsGraphOfGit();
+  void writesWithGit();
+  void keepsChainOfGit();
+  void releasesReplacedFile();
 
 private:
   Commit commitFile(const QString &name, const QString &content);
   QStringList walk() const;
   void verifyWithGit();
+  bool runGit(const QStringList &args, QString *output = nullptr) const;
+  QByteArray readGraph() const;
   QStringList staleFiles() const;
 
   QScopedPointer<Test::ScratchRepository> mScratch;
@@ -95,6 +106,45 @@ void TestCommitGraph::verifyWithGit() {
   QVERIFY(process.waitForFinished(60000));
   QVERIFY2(process.exitCode() == 0, process.readAll().constData());
 }
+
+bool TestCommitGraph::runGit(const QStringList &args, QString *output) const {
+  QString git = QStandardPaths::findExecutable("git");
+  if (git.isEmpty())
+    return false;
+
+  QProcess process;
+  process.setWorkingDirectory(mRepo.workdir().path());
+  process.setProcessChannelMode(QProcess::MergedChannels);
+  process.start(git, args);
+  bool finished = process.waitForFinished(60000);
+  if (output)
+    *output = QString::fromUtf8(process.readAll());
+  return finished && process.exitCode() == 0;
+}
+
+QByteArray TestCommitGraph::readGraph() const {
+  QFile file(CommitGraph::path(mRepo));
+  return file.open(QFile::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+namespace {
+
+// True if the commit-graph data has a chunk with the given id, e.g. "GDA2".
+bool hasChunk(const QByteArray &data, const char *id) {
+  if (data.size() < 8)
+    return false;
+
+  int chunks = uchar(data.at(6));
+  for (int i = 0; i < chunks; ++i) {
+    qint64 entry = 8 + i * 12;
+    if (entry + 4 <= data.size() && data.mid(entry, 4) == id)
+      return true;
+  }
+
+  return false;
+}
+
+} // namespace
 
 QStringList TestCommitGraph::staleFiles() const {
   QDir dir = QFileInfo(CommitGraph::path(mRepo)).dir();
@@ -263,6 +313,151 @@ void TestCommitGraph::mergesHaveValidGenerations() {
   QByteArray data = file.readAll();
   QVERIFY(CommitGraph::fixGenerations(data, &changed));
   QVERIFY(!changed);
+}
+
+// git writes generation data (GDA2) that the libgit2 of the submodule
+// rejected as an unknown chunk, so it ignored every file of newer gits.
+void TestCommitGraph::readsGraphOfGit() {
+  if (QStandardPaths::findExecutable("git").isEmpty())
+    QSKIP("git is not installed");
+
+  QString output;
+  QVERIFY2(runGit({"-c", "commitGraph.generationVersion=2", "commit-graph",
+                   "write", "--reachable"},
+                  &output),
+           qPrintable(output));
+  QVERIFY(hasChunk(readGraph(), "GDA2"));
+
+  QString objects = QFileInfo(QFileInfo(CommitGraph::path(mRepo)).path())
+                        .path();
+  git_commit_graph *graph = nullptr;
+#ifdef GIT_EXPERIMENTAL_SHA256
+  git_commit_graph_open_options opts = GIT_COMMIT_GRAPH_OPEN_OPTIONS_INIT;
+  int error = git_commit_graph_open(&graph, objects.toUtf8(), &opts);
+#else
+  int error = git_commit_graph_open(&graph, objects.toUtf8());
+#endif
+  const git_error *last = git_error_last();
+  QVERIFY2(!error, last && last->message ? last->message : "");
+  git_commit_graph_free(graph);
+
+  CommitGraph::reload(mRepo);
+  QCOMPARE(walk(), QStringList({"4", "3", "2", "1", "0"}));
+}
+
+// git writes the data that only git reads.
+void TestCommitGraph::writesWithGit() {
+  if (QStandardPaths::findExecutable("git").isEmpty())
+    QSKIP("git is not installed");
+
+  mRepo.gitConfig().setValue("commitGraph.generationVersion", 2);
+  QString error;
+  QVERIFY2(CommitGraph::write(mRepo.dir().path(), &error), qPrintable(error));
+  QVERIFY(hasChunk(readGraph(), "GDA2"));
+  QVERIFY(!QFile::exists(CommitGraph::path(mRepo) + ".lock"));
+  verifyWithGit();
+
+  // It replaces a file that is mapped.
+  CommitGraph::reload(mRepo);
+  QCOMPARE(walk().size(), 5);
+  QVERIFY(commitFile("file.txt", "5").isValid());
+  QVERIFY2(CommitGraph::write(mRepo.dir().path(), &error), qPrintable(error));
+  verifyWithGit();
+
+  CommitGraph::reload(mRepo);
+  QCOMPARE(walk(), QStringList({"5", "4", "3", "2", "1", "0"}));
+  QVERIFY2(staleFiles().isEmpty(), qPrintable(staleFiles().join(", ")));
+}
+
+// git prefers a single file over the split chain of 'git maintenance', so
+// writing one would hide the newer chain, including its changed-path filters.
+void TestCommitGraph::keepsChainOfGit() {
+  if (QStandardPaths::findExecutable("git").isEmpty())
+    QSKIP("git is not installed");
+
+  // A single file as written by earlier versions.
+  QString path = CommitGraph::path(mRepo);
+  QString error;
+  QVERIFY2(CommitGraph::write(mRepo.dir().path(), &error), qPrintable(error));
+  QByteArray single = readGraph();
+  QVERIFY(!single.isEmpty());
+
+  // git replaces it with a chain.
+  QString output;
+  QVERIFY2(runGit({"commit-graph", "write", "--reachable", "--split=replace",
+                   "--changed-paths"},
+                  &output),
+           qPrintable(output));
+  QString chain = QFileInfo(path).dir().filePath(
+      "commit-graphs/commit-graph-chain");
+  QVERIFY(QFile::exists(chain));
+  QVERIFY(!QFile::exists(path));
+
+  // Nothing is written while the chain exists.
+  QVERIFY(!CommitGraph::isOutdated(mRepo, 0));
+  QVERIFY(!CommitGraph::write(mRepo.dir().path(), &error));
+  QVERIFY(!error.isEmpty());
+  QVERIFY(!QFile::exists(path));
+  QVERIFY(!CommitGraph::removeShadow(mRepo.dir().path()));
+
+  // A file of an earlier version is removed.
+  {
+    QFile file(path);
+    QVERIFY(file.open(QFile::WriteOnly));
+    QCOMPARE(file.write(single), single.size());
+  }
+  QVERIFY(CommitGraph::removeShadow(mRepo.dir().path()));
+  QVERIFY(!QFile::exists(path));
+  QVERIFY(QFile::exists(chain));
+  verifyWithGit();
+}
+
+namespace {
+
+// Handles (Windows) or mappings of commit-graph files (Linux), -1 if unknown.
+int resourceCount() {
+#if defined(Q_OS_WIN)
+  DWORD count = 0;
+  return GetProcessHandleCount(GetCurrentProcess(), &count) ? int(count) : -1;
+#elif defined(Q_OS_LINUX)
+  QFile maps("/proc/self/maps");
+  if (!maps.open(QFile::ReadOnly))
+    return -1;
+  return maps.readAll().count("commit-graph");
+#else
+  return -1;
+#endif
+}
+
+} // namespace
+
+// libgit2 opened an unchanged file again after every refresh of the object
+// database, e.g. after looking up a missing object, and leaked the mapping.
+void TestCommitGraph::releasesReplacedFile() {
+  QString error;
+  QVERIFY2(CommitGraph::write(mRepo.dir().path(), &error), qPrintable(error));
+  CommitGraph::reload(mRepo);
+  QCOMPARE(walk().size(), 5);
+
+  int before = resourceCount();
+  if (before < 0)
+    QSKIP("can't count the resources of the process");
+
+  for (int i = 0; i < 50; ++i) {
+    CommitGraph::reload(mRepo);
+    QCOMPARE(walk().size(), 5);
+  }
+
+  int after = resourceCount();
+  QVERIFY2(after - before < 10, qPrintable(QString("%1 -> %2").arg(before).arg(after)));
+
+  // A replaced file is released.
+  QVERIFY(commitFile("file.txt", "5").isValid());
+  QVERIFY2(CommitGraph::write(mRepo.dir().path(), &error), qPrintable(error));
+  CommitGraph::reload(mRepo);
+  QCOMPARE(walk().size(), 6);
+  CommitGraph::reload(mRepo);
+  QVERIFY2(staleFiles().isEmpty(), qPrintable(staleFiles().join(", ")));
 }
 
 TEST_MAIN(TestCommitGraph)

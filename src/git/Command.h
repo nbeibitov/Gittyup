@@ -18,6 +18,9 @@ namespace git {
 
 class Command {
 public:
+  // The git executable, or an empty string if it isn't installed.
+  static QString gitPath();
+
   static QString bashPath();
   static QString substitute(const QProcessEnvironment &env,
                             const QString &command);
