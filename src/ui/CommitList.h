@@ -11,7 +11,9 @@
 #define COMMITLIST_H
 
 #include "git/Reference.h"
+#include "git/Id.h"
 #include <QListView>
+#include <QSet>
 #include <QTimer>
 
 class Index;
@@ -69,6 +71,10 @@ public:
   // Select the best common ancestor of the commits, where their lines of
   // the history meet. Returns false if there is none in the list.
   bool selectMergeBase(const git::Commit &lhs, const git::Commit &rhs);
+
+  // Whether the commit is on the line of first parents through the single
+  // selected commit, among the loaded rows, which the graph highlights.
+  bool isOnSelectedLine(const git::Commit &commit) const;
   bool selectRange(const QString &range, const QString &file = QString(),
                    bool spontaneous = false);
   void suppressResetWalker(bool suppress);
@@ -130,6 +136,7 @@ private:
   bool isStar(const QModelIndex &index, const QPoint &pos);
 
   QString mFile;
+  QSet<git::Id> mLine; // see isOnSelectedLine()
   QModelIndex mStar;
   QModelIndex mCancel;
   bool mSpontaneous = true;

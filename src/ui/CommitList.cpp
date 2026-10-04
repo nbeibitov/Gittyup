@@ -1032,10 +1032,20 @@ public:
 
         painter->setPen(pen);
         switch (segments.at(j).toInt()) {
-          case Dot:
+          case Dot: {
             painter->setPen(dot);
             painter->drawEllipse(QPoint(x1, y2), r, r);
+
+            // Mark the line of the selected commit.
+            auto list = qobject_cast<const CommitList *>(parent());
+            git::Commit commit =
+                index.data(CommitList::Role::CommitRole).value<git::Commit>();
+            if (!selected && list && list->isOnSelectedLine(commit)) {
+              painter->setPen(QPen(highlight, 2));
+              painter->drawEllipse(QPoint(x1, y2), r + 3, r + 3);
+            }
             break;
+          }
 
           case Top:
             painter->drawLine(x1, y, x1, y1);
@@ -2430,12 +2440,72 @@ void CommitList::selectIndexes(const QItemSelection &selection,
     scrollTo(indexes.first());
 }
 
+bool CommitList::isOnSelectedLine(const git::Commit &commit) const {
+  return commit.isValid() && mLine.contains(commit.id());
+}
+
 void CommitList::notifySelectionChanged() {
   // Multiple selection means that the selected parameter
   // could be empty when there are still indexes selected.
   QModelIndexList indexes = selectedIndexes();
   if (indexes.isEmpty())
     return;
+
+  // The line of first parents through a single selected commit.
+  QSet<git::Id> line;
+  git::Commit selected;
+  if (indexes.size() == 1)
+    selected = indexes.first().data(CommitRole).value<git::Commit>();
+  if (selected.isValid()) {
+    // First parents of the loaded rows, and the children that continue them
+    // above the selection. A commit with several of them ends the line.
+    QAbstractItemModel *model = this->model();
+    int row = indexes.first().row();
+    QHash<git::Id, git::Commit> firstParents;
+    QHash<git::Id, git::Id> firstChildren;
+    QSet<git::Id> forks;
+    for (int i = 0; i < model->rowCount(); ++i) {
+      git::Commit commit =
+          model->index(i, 0).data(CommitRole).value<git::Commit>();
+      if (!commit.isValid())
+        continue;
+      QList<git::Commit> parents = commit.parents();
+      if (parents.isEmpty())
+        continue;
+      firstParents.insert(commit.id(), parents.first());
+      if (i < row) {
+        git::Id parent = parents.first().id();
+        if (firstChildren.contains(parent))
+          forks.insert(parent);
+        firstChildren.insert(parent, commit.id());
+      }
+    }
+
+    // Down to the oldest loaded ancestor.
+    for (git::Id id = selected.id(); !line.contains(id);) {
+      line.insert(id);
+      auto it = firstParents.constFind(id);
+      if (it == firstParents.constEnd())
+        break;
+      id = it->id();
+    }
+
+    // Up while the line doesn't branch.
+    for (git::Id id = selected.id();
+         firstChildren.contains(id) && !forks.contains(id);) {
+      id = firstChildren.value(id);
+      line.insert(id);
+    }
+
+    // A single commit is no line.
+    if (line.size() < 2)
+      line.clear();
+  }
+
+  if (line != mLine) {
+    mLine = line;
+    viewport()->update();
+  }
 
   // Redraw all selected indexes. Separators may have changed.
   for (const QModelIndex &index : indexes)

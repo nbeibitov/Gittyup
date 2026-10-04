@@ -29,6 +29,7 @@ private slots:
   void children();
   void uncommittedChanges();
   void mergeBase();
+  void selectedLine();
 
 private:
   git::Commit commitFile(const QString &name, const QString &content);
@@ -165,6 +166,34 @@ void TestHistoryNavigation::mergeBase() {
   // An ancestor is the merge base itself.
   QVERIFY(mList->selectMergeBase(mM, mB));
   QCOMPARE(selected(), mB);
+}
+
+// The graph marks the line of first parents through the selection.
+void TestHistoryNavigation::selectedLine() {
+  select(mM);
+  QVERIFY(mList->isOnSelectedLine(mM));
+  QVERIFY(mList->isOnSelectedLine(mB));
+  QVERIFY(mList->isOnSelectedLine(mA));
+  QVERIFY(!mList->isOnSelectedLine(mC));
+
+  // A merged branch ends where it is merged.
+  select(mC);
+  QVERIFY(mList->isOnSelectedLine(mC));
+  QVERIFY(mList->isOnSelectedLine(mA));
+  QVERIFY(!mList->isOnSelectedLine(mM));
+  QVERIFY(!mList->isOnSelectedLine(mB));
+
+  // The line doesn't continue up where the history branches off, and a
+  // single commit is no line.
+  select(mA);
+  QVERIFY(!mList->isOnSelectedLine(mA));
+  QVERIFY(!mList->isOnSelectedLine(mB));
+  QVERIFY(!mList->isOnSelectedLine(mC));
+
+  // It continues up along a single child.
+  select(mB);
+  QVERIFY(mList->isOnSelectedLine(mM));
+  QVERIFY(mList->isOnSelectedLine(mA));
 }
 
 TEST_MAIN(TestHistoryNavigation)
