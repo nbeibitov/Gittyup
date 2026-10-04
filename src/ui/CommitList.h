@@ -54,6 +54,21 @@ public:
   void resetSelection(bool spontaneous = false);
   void selectFirstCommit(bool spontaneous = false);
   void selectCommitRelative(int offset);
+
+  // Follow a line of the history from the selected row. The uncommitted
+  // changes are a child of HEAD. Return false if there is no such commit in
+  // the list, e.g. because the list is filtered.
+  bool selectParent(int number = 0);
+  bool selectChild();
+
+  // The children of the commit among the rows above it, where a
+  // topological order puts them. An invalid commit in the result stands for
+  // the uncommitted changes.
+  QList<git::Commit> childCommits(const git::Commit &commit);
+
+  // Select the best common ancestor of the commits, where their lines of
+  // the history meet. Returns false if there is none in the list.
+  bool selectMergeBase(const git::Commit &lhs, const git::Commit &rhs);
   bool selectRange(const QString &range, const QString &file = QString(),
                    bool spontaneous = false);
   void suppressResetWalker(bool suppress);

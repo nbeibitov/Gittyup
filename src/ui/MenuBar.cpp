@@ -262,6 +262,15 @@ static Hotkey prevHotkey = HotkeyManager::registerHotkey(
 static Hotkey nextHotkey = HotkeyManager::registerHotkey(
     QKeySequence::Forward, "history/next", "History/Forward");
 
+static Hotkey parentHotkey = HotkeyManager::registerHotkey(
+    "Alt+Down", "history/parent", "History/Parent");
+
+static Hotkey secondParentHotkey = HotkeyManager::registerHotkey(
+    "Alt+Shift+Down", "history/secondParent", "History/Second Parent");
+
+static Hotkey childHotkey = HotkeyManager::registerHotkey(
+    "Alt+Up", "history/child", "History/Child");
+
 static Hotkey prevTabHotkey = HotkeyManager::registerHotkey(
     QKeySequence::PreviousChild, "window/prevTab", "Window/Show Previous Tab");
 
@@ -832,6 +841,33 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
   mNext->setEnabled(false);
   connect(mNext, &QAction::triggered, [this] { view()->history()->next(); });
 
+  // Follow the lines of the history.
+  historyMenu->addSeparator();
+
+  mParent = historyMenu->addAction(tr("Parent"));
+  parentHotkey.use(mParent);
+  mParent->setEnabled(false);
+  connect(mParent, &QAction::triggered, [this] {
+    if (!view()->selectParent())
+      QApplication::beep();
+  });
+
+  mSecondParent = historyMenu->addAction(tr("Second Parent"));
+  secondParentHotkey.use(mSecondParent);
+  mSecondParent->setEnabled(false);
+  connect(mSecondParent, &QAction::triggered, [this] {
+    if (!view()->selectParent(1))
+      QApplication::beep();
+  });
+
+  mChild = historyMenu->addAction(tr("Child"));
+  childHotkey.use(mChild);
+  mChild->setEnabled(false);
+  connect(mChild, &QAction::triggered, [this] {
+    if (!view()->selectChild())
+      QApplication::beep();
+  });
+
   // Window
   QMenu *windowMenu = addMenu(tr("Window"));
   mPrevTab = windowMenu->addAction(tr("Show Previous Tab"));
@@ -1170,6 +1206,9 @@ void MenuBar::updateHistory() {
   RepoView *view = win ? win->currentView() : nullptr;
   mPrev->setEnabled(view && view->history()->hasPrev());
   mNext->setEnabled(view && view->history()->hasNext());
+  mParent->setEnabled(view != nullptr);
+  mSecondParent->setEnabled(view != nullptr);
+  mChild->setEnabled(view != nullptr);
 }
 
 void MenuBar::updateWindow() {

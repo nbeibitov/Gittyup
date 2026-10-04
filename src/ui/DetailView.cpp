@@ -239,11 +239,14 @@ public:
     mRefs = new Badge(QList<Badge::Label>(), this);
     mParents = new QLabel(this);
     mParents->setTextInteractionFlags(kTextFlags);
+    mChildren = new QLabel(this);
+    mChildren->setTextInteractionFlags(kTextFlags);
 
     QHBoxLayout *line3 = new QHBoxLayout;
     line3->addWidget(mHash);
     line3->addWidget(copy);
     line3->addWidget(mParents);
+    line3->addWidget(mChildren);
     line3->addStretch();
     line3->addWidget(mRefs);
 
@@ -278,6 +281,7 @@ public:
     RepoView *view = RepoView::parentView(this);
     connect(mHash, &QLabel::linkActivated, view, &RepoView::visitLink);
     connect(mParents, &QLabel::linkActivated, view, &RepoView::visitLink);
+    connect(mChildren, &QLabel::linkActivated, view, &RepoView::visitLink);
 
     connect(&mWatcher, &QFutureWatcher<QString>::finished, this, [this] {
       QString result = mWatcher.result();
@@ -322,10 +326,12 @@ public:
     mAuthorCommitterDate->setDate(QString());
     mAuthorCommitterDate->setAuthorCommitter(QString(), QString());
     mParents->setText(QString());
+    mChildren->setText(QString());
     mMessage->setPlainText(QString());
     mPicture->setPixmap(QPixmap());
 
     mParents->setVisible(false);
+    mChildren->setVisible(false);
     mSeparator->setVisible(false);
     mMessage->setVisible(false);
 
@@ -403,17 +409,29 @@ public:
         kAuthorFmt.arg(author.name(), author.email()),
         kAuthorFmt.arg(committer.name(), committer.email()));
 
-    QStringList parents;
-    for (const git::Commit &parent : commit.parents()) {
-      QUrl url;
-      url.setScheme("id");
-      url.setPath(parent.id().toString());
-      parents.append(kLinkFmt.arg(url.toString(), parent.shortId()));
-    }
+    auto links = [](const QList<git::Commit> &commits) {
+      QStringList result;
+      for (const git::Commit &commit : commits) {
+        if (!commit.isValid())
+          continue; // the uncommitted changes
+        QUrl url;
+        url.setScheme("id");
+        url.setPath(commit.id().toString());
+        result.append(kLinkFmt.arg(url.toString(), commit.shortId()));
+      }
+      return result;
+    };
 
+    QStringList parents = links(commit.parents());
     QString initial = kItalicFmt.arg(tr("initial commit"));
     QString text = parents.isEmpty() ? initial : parents.join(", ");
     mParents->setText(brightText(tr("Parents:")) + " " + text);
+
+    // The commits that continue the history, among the listed ones.
+    RepoView *view = RepoView::parentView(this);
+    QStringList children = links(view->childCommits(commit));
+    mChildren->setText(brightText(tr("Children:")) + " " + children.join(", "));
+    mChildren->setVisible(!children.isEmpty());
 
     QString msg = commit.message(git::Commit::SubstituteEmoji).trimmed();
     mMessage->setPlainText(msg);
@@ -480,6 +498,7 @@ private:
   Badge *mRefs;
   QLabel *mHash;
   QLabel *mParents;
+  QLabel *mChildren;
   QLabel *mPicture;
   QFrame *mSeparator;
   QTextEdit *mMessage;

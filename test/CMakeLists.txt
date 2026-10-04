@@ -128,6 +128,7 @@ test(NAME indexRefresh)
 test(NAME hook)
 test(NAME signing)
 test(NAME filterProcess)
+test(NAME historyNavigation)
 
 # A long-running filter for filterProcess.
 add_executable(test_filter_server filterServer.cpp)

@@ -137,6 +137,9 @@ private:
   // History
   QAction *mPrev;
   QAction *mNext;
+  QAction *mParent;
+  QAction *mSecondParent;
+  QAction *mChild;
 
   // Window
   QAction *mPrevTab;

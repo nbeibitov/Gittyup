@@ -2378,8 +2378,9 @@ bool RepoView::runHook(const QString &name, const QStringList &args,
           &QEventLoop::quit);
 
   mRunningHook = true;
-  watcher.setFuture(QtConcurrent::run(
-      [dir, name, args, env] { return git::Hook::run(dir, name, args, {}, env); }));
+  watcher.setFuture(QtConcurrent::run([dir, name, args, env] {
+    return git::Hook::run(dir, name, args, {}, env);
+  }));
   loop.exec();
   mRunningHook = false;
 
@@ -2392,7 +2393,9 @@ bool RepoView::runHook(const QString &name, const QStringList &args,
   if (result.exitCode) {
     LogEntry *error = entry->addEntry(
         LogEntry::Error,
-        tr("The %1 hook failed with exit code %2.").arg(name).arg(result.exitCode));
+        tr("The %1 hook failed with exit code %2.")
+            .arg(name)
+            .arg(result.exitCode));
     if (!result.output.isEmpty())
       error->addEntry(LogEntry::Hint, hookOutput(result.output));
     return false;
@@ -3558,6 +3561,16 @@ ToolBar *RepoView::toolBar() const {
 }
 
 CommitList *RepoView::commitList() const { return mCommits; }
+
+bool RepoView::selectParent(int number) {
+  return mCommits->selectParent(number);
+}
+
+bool RepoView::selectChild() { return mCommits->selectChild(); }
+
+QList<git::Commit> RepoView::childCommits(const git::Commit &commit) const {
+  return mCommits->childCommits(commit);
+}
 
 void RepoView::notifyReferenceUpdated(const QString &name) {
   emit mRepo.notifier()->referenceUpdated(mRepo.lookupRef(name));

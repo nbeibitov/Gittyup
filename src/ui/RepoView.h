@@ -83,6 +83,13 @@ public:
 
   // Select head reference in ref list.
   void selectHead();
+
+  // Follow a line of the history from the selected commit.
+  bool selectParent(int number = 0);
+  bool selectChild();
+
+  // The children of the commit in the commit list.
+  QList<git::Commit> childCommits(const git::Commit &commit) const;
   void selectFirstCommit();
 
   git::Repository repo() const { return mRepo; }

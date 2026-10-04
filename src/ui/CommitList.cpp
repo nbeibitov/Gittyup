@@ -1721,6 +1721,127 @@ void CommitList::selectCommitRelative(int offset) {
   selectIndexes(QItemSelection(new_index, new_index), QString(), true);
 }
 
+namespace {
+
+// The row of the selection that the navigation starts from.
+QModelIndex currentRow(QItemSelectionModel *selection) {
+  QModelIndex current = selection->currentIndex();
+  if (current.isValid() && selection->isSelected(current))
+    return current;
+
+  QModelIndexList indexes = selection->selectedIndexes();
+  return indexes.isEmpty() ? QModelIndex() : indexes.first();
+}
+
+} // namespace
+
+bool CommitList::selectParent(int number) {
+  QModelIndex index = currentRow(selectionModel());
+  if (!index.isValid())
+    return false;
+
+  // The parent of the uncommitted changes is HEAD.
+  git::Commit commit = index.data(CommitRole).value<git::Commit>();
+  git::Commit parent;
+  if (!commit.isValid()) {
+    if (number > 0)
+      return false;
+    parent = RepoView::parentView(this)->repo().head().target();
+  } else {
+    QList<git::Commit> parents = commit.parents();
+    if (number >= parents.size())
+      return false;
+    parent = parents.at(number);
+  }
+
+  QModelIndex target = findCommit(parent);
+  if (!target.isValid() || target == index)
+    return false;
+
+  selectIndexes(QItemSelection(target, target), QString(), true);
+  return true;
+}
+
+QList<git::Commit> CommitList::childCommits(const git::Commit &commit) {
+  QAbstractItemModel *model = this->model();
+  int end = model->rowCount();
+  git::Commit head = RepoView::parentView(this)->repo().head().target();
+  QModelIndex found = findCommit(commit);
+  if (found.isValid())
+    end = found.row();
+
+  QList<git::Commit> result;
+  for (int row = 0; row < end; ++row) {
+    git::Commit child =
+        model->index(row, 0).data(CommitRole).value<git::Commit>();
+    if (!child.isValid()) {
+      // The uncommitted changes are on top of HEAD.
+      if (row == 0 && commit.isValid() && commit == head)
+        result.append(git::Commit());
+      continue;
+    }
+
+    if (child.parents().contains(commit))
+      result.append(child);
+  }
+
+  return result;
+}
+
+bool CommitList::selectChild() {
+  QModelIndex index = currentRow(selectionModel());
+  if (!index.isValid())
+    return false;
+
+  git::Commit commit = index.data(CommitRole).value<git::Commit>();
+  if (!commit.isValid())
+    return false; // nothing comes after the uncommitted changes
+
+  QList<git::Commit> children = childCommits(commit);
+  if (children.isEmpty())
+    return false;
+
+  // Let the user choose a line where the history branches off.
+  git::Commit child = children.first();
+  if (children.size() > 1) {
+    QMenu menu(this);
+    for (const git::Commit &option : children) {
+      QString text = option.isValid() ? QString("%1  %2").arg(
+                                            option.shortId(), option.summary())
+                                      : tr("Uncommitted changes");
+      menu.addAction(text)->setData(QVariant::fromValue(option));
+    }
+
+    QPoint pos = visualRect(index).bottomLeft();
+    QAction *action = menu.exec(viewport()->mapToGlobal(pos));
+    if (!action)
+      return true; // canceled
+    child = action->data().value<git::Commit>();
+  }
+
+  QModelIndex target = findCommit(child);
+  if (!target.isValid())
+    return false;
+
+  selectIndexes(QItemSelection(target, target), QString(), true);
+  return true;
+}
+
+bool CommitList::selectMergeBase(const git::Commit &lhs,
+                                 const git::Commit &rhs) {
+  git::Repository repo = RepoView::parentView(this)->repo();
+  git::Commit base = repo.mergeBase(lhs, rhs);
+  if (!base.isValid())
+    return false;
+
+  QModelIndex index = findCommit(base);
+  if (!index.isValid())
+    return false;
+
+  selectIndexes(QItemSelection(index, index), QString(), true);
+  return true;
+}
+
 bool CommitList::selectRange(const QString &range, const QString &file,
                              bool spontaneous) {
   // Try to select the "status" index.
@@ -1895,6 +2016,51 @@ void CommitList::contextMenuEvent(QContextMenuEvent *event) {
         if (index.data(CommitRole).isValid())
           index.data(CommitRole).value<git::Commit>().setStarred(!anyStarred);
     });
+
+    // Go to where the lines of the history meet.
+    QList<git::Commit> selected = selectedCommits();
+    auto goToBase = [this](const git::Commit &lhs, const git::Commit &rhs) {
+      if (!selectMergeBase(lhs, rhs))
+        QApplication::beep();
+    };
+
+    if (selected.size() == 2) {
+      git::Commit lhs = selected.first();
+      git::Commit rhs = selected.last();
+      menu.addAction(tr("Go to Merge Base"),
+                     [goToBase, lhs, rhs] { goToBase(lhs, rhs); });
+    } else if (selected.size() == 1) {
+      git::Commit commit = selected.first();
+      git::Repository repo = view->repo();
+      QMenu *bases = menu.addMenu(tr("Go to Merge Base With"));
+      QStringList names;
+      auto add = [&](const git::Reference &ref, const QString &text) {
+        git::Commit target = ref.isValid() ? ref.target() : git::Commit();
+        if (!target.isValid() || target == commit || names.contains(text))
+          return;
+        names.append(text);
+        bases->addAction(text, [goToBase, commit, target] {
+          goToBase(commit, target);
+        });
+      };
+
+      git::Reference head = repo.head();
+      add(head, tr("HEAD (%1)").arg(head.isValid() ? head.name() : QString()));
+      if (head.isValid() && head.isLocalBranch())
+        add(git::Branch(head).upstream(),
+            git::Branch(head).upstream().name());
+
+      // Not too many for a menu.
+      const int kMaxBranches = 20;
+      for (const git::Branch &branch : repo.branches(GIT_BRANCH_LOCAL)) {
+        if (names.size() >= kMaxBranches)
+          break;
+        if (!branch.isHead())
+          add(branch, branch.name());
+      }
+
+      bases->setEnabled(!bases->isEmpty());
+    }
 
     // single selection
     if (selectionModel()->selectedIndexes().size() <= 1) {
