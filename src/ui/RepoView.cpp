@@ -485,10 +485,17 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
             mIndexRefreshEntry = nullptr;
             mIndexRefreshTime.start(); // for the interval
 
-            if (result.written) {
+            if (result.written && result.hashed < 0) {
+              entry->setText(tr("file information updated by git in %1, "
+                                "status checks are fast again")
+                                 .arg(time));
+            } else if (result.written) {
               entry->setText(tr("file information of %1 files updated in %2, "
                                 "status checks are fast again")
                                  .arg(QLocale().toString(result.hashed), time));
+            } else if (result.error.isEmpty() && result.hashed < 0) {
+              entry->setText(tr("already up to date (checked by git in %1)")
+                                 .arg(time));
             } else if (result.error.isEmpty()) {
               entry->setText(tr("already up to date (%1 files read in %2)")
                                  .arg(QLocale().toString(result.hashed), time));

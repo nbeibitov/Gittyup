@@ -8,6 +8,7 @@
 //
 
 #include "Test.h"
+#include "git/Config.h"
 #include "git/Index.h"
 #include "git/IndexRefresh.h"
 #include "git2.h"
@@ -31,8 +32,11 @@ private slots:
   void upToDate();
   void canceled();
   void locked();
+  void extensions();
+  void keepsExtensionsOfGit();
 
 private:
+  bool runGit(const QStringList &args) const;
   void touchAll();
   int hashedByStatus() const;
   QByteArray index() const;
@@ -101,6 +105,14 @@ QByteArray TestIndexRefresh::index() const {
   return file.open(QFile::ReadOnly) ? file.readAll() : QByteArray();
 }
 
+bool TestIndexRefresh::runGit(const QStringList &args) const {
+  QString git = QStandardPaths::findExecutable("git");
+  QProcess process;
+  process.setWorkingDirectory(mRepo.workdir().path());
+  process.start(git, args);
+  return process.waitForFinished(60000) && process.exitCode() == 0;
+}
+
 void TestIndexRefresh::refreshMakesStatusFast() {
   touchAll();
   QCOMPARE(hashedByStatus(), kFiles);
@@ -164,6 +176,55 @@ void TestIndexRefresh::locked() {
   QCOMPARE(index(), before);
   QVERIFY(QFile::exists(mRepo.dir().filePath("index.lock")));
   QVERIFY(QFile::remove(mRepo.dir().filePath("index.lock")));
+}
+
+void TestIndexRefresh::extensions() {
+  // Written by libgit2.
+  std::optional<QStringList> names = IndexRefresh::extensions(index());
+  QVERIFY(names.has_value());
+  for (const QString &name : *names)
+    QVERIFY2(QStringList({"TREE", "REUC", "NAME"}).contains(name),
+             qPrintable(name));
+
+  QVERIFY(!IndexRefresh::extensions(QByteArray()).has_value());
+  QVERIFY(!IndexRefresh::extensions(index().left(100)).has_value());
+
+  if (QStandardPaths::findExecutable("git").isEmpty())
+    QSKIP("git is not installed");
+
+  // Version 4 compresses paths.
+  for (int version : {2, 3, 4}) {
+    QVERIFY(runGit({"update-index", "--index-version", QString::number(version)}));
+    QVERIFY(runGit({"-c", "core.untrackedCache=true", "status"}));
+    names = IndexRefresh::extensions(index());
+    QVERIFY2(names.has_value(), qPrintable(QString::number(version)));
+    QVERIFY2(names->contains("UNTR"), qPrintable(names->join(", ")));
+  }
+}
+
+// libgit2 would drop the untracked cache of git when it writes the index.
+void TestIndexRefresh::keepsExtensionsOfGit() {
+  if (QStandardPaths::findExecutable("git").isEmpty())
+    QSKIP("git is not installed");
+
+  mRepo.gitConfig().setValue("core.untrackedCache", true);
+  QVERIFY(runGit({"status"}));
+  QVERIFY(IndexRefresh::extensions(index())->contains("UNTR"));
+
+  touchAll();
+  QCOMPARE(hashedByStatus(), kFiles);
+
+  IndexRefresh::Result result = IndexRefresh::run(mRepo.dir().path());
+  QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+  QVERIFY(result.written);
+  QCOMPARE(result.hashed, -1); // done by git
+  QVERIFY(IndexRefresh::extensions(index())->contains("UNTR"));
+  QCOMPARE(hashedByStatus(), 0);
+
+  // Nothing to do the next time.
+  result = IndexRefresh::run(mRepo.dir().path());
+  QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+  QVERIFY(!result.written);
 }
 
 TEST_MAIN(TestIndexRefresh)
