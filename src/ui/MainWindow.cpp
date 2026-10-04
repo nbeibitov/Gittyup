@@ -21,6 +21,7 @@
 #include "git/Repository.h"
 #include "git/Config.h"
 #include "git/Submodule.h"
+#include "git2/errors.h"
 #include "qmap.h"
 #include <QApplication>
 #include <QCloseEvent>
@@ -29,6 +30,7 @@
 #include <QCryptographicHash>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QTimeLine>
 #include <QToolButton>
@@ -490,10 +492,38 @@ void MainWindow::dropEvent(QDropEvent *event) {
     addTab(url.toLocalFile());
 }
 
+QString MainWindow::invalidRepoReason() {
+  const git_error *error = git_error_last();
+  if (!error || !error->message || !*error->message)
+    return QString();
+
+  // libgit2 refuses repositories with extensions it doesn't support.
+  QString message = QString::fromUtf8(error->message);
+  QRegularExpression re("unsupported extension name extensions\\.(\\S+)");
+  QRegularExpressionMatch match = re.match(message);
+  if (!match.hasMatch())
+    return message;
+
+  QString name = match.captured(1).toLower();
+  if (name == "partialclone")
+    return tr("It is a partial clone (git clone --filter), which Gittyup "
+              "doesn't support because it can't download the objects that "
+              "are left out.");
+  if (name == "refstorage")
+    return tr("It stores references in the reftable format, which Gittyup "
+              "doesn't support yet.");
+  return tr("It uses the repository extension '%1', which Gittyup doesn't "
+            "support.")
+      .arg(match.captured(1));
+}
+
 void MainWindow::warnInvalidRepo(const QString &path) {
+  QString reason = invalidRepoReason();
   QString title = tr("Invalid Git Repository");
   QString text = tr("%1 does not contain a valid git repository.");
-  QMessageBox::warning(nullptr, title, text.arg(path));
+  QMessageBox box(QMessageBox::Warning, title, text.arg(path), QMessageBox::Ok);
+  box.setInformativeText(reason);
+  box.exec();
 }
 
 void MainWindow::updateTabNames() {

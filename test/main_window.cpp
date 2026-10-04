@@ -8,6 +8,7 @@
 //
 
 #include "Test.h"
+#include "git/Config.h"
 #include "ui/MainWindow.h"
 
 using namespace Test;
@@ -19,6 +20,7 @@ class TestMainWindow : public QObject {
 private slots:
   void initTestCase();
   void show();
+  void invalidRepoReason();
   void cleanupTestCase();
 
 private:
@@ -31,6 +33,31 @@ void TestMainWindow::initTestCase() { mWindow = new MainWindow(mRepo); }
 void TestMainWindow::show() {
   mWindow->show();
   QVERIFY(qWaitForWindowActive(mWindow));
+}
+
+// libgit2 refuses repositories with extensions it doesn't support.
+void TestMainWindow::invalidRepoReason() {
+  struct Case {
+    QString extension;
+    QString value;
+    QString reason;
+  };
+  QList<Case> cases = {{"partialClone", "origin", "partial clone"},
+                       {"refStorage", "reftable", "reftable"},
+                       {"someFutureThing", "true", "someFutureThing"}};
+
+  for (const Case &c : cases) {
+    ScratchRepository scratch;
+    QString path = git::Repository(scratch).workdir().path();
+    git::Config config = git::Repository(scratch).gitConfig();
+    config.setValue("core.repositoryformatversion", 1);
+    config.setValue("extensions." + c.extension, c.value);
+
+    QVERIFY(!git::Repository::open(path).isValid());
+    QString reason = MainWindow::invalidRepoReason();
+    QVERIFY2(reason.contains(c.reason, Qt::CaseInsensitive),
+             qPrintable(reason));
+  }
 }
 
 void TestMainWindow::cleanupTestCase() { mWindow->close(); }

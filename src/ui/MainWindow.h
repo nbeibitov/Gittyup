@@ -71,6 +71,13 @@ private:
 
   static void warnInvalidRepo(const QString &path);
 
+public:
+  // Why a repository couldn't be opened, from the error that opening it
+  // just set. Empty if there is no error.
+  static QString invalidRepoReason();
+
+private:
+
   QStringList paths() const;
   QString windowGroup() const;
 
