@@ -42,6 +42,7 @@
 #include "git/Command.h"
 #include "git/CommitGraph.h"
 #include "git/Config.h"
+#include "git/Filter.h"
 #include "git/Hook.h"
 #include "git/Index.h"
 #include "git/Rebase.h"
@@ -661,6 +662,10 @@ void RepoView::diffSelected(const git::Diff diff, const QString &file,
 }
 
 RepoView::~RepoView() {
+  // Release the working directory, which can't be removed on Windows while
+  // a long-running filter runs in it.
+  git::Filter::stopProcesses();
+
   // Don't keep the application running for a refresh of the index.
   if (mIndexRefreshCanceled)
     *mIndexRefreshCanceled = true;

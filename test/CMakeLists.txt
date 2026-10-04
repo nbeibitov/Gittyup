@@ -127,6 +127,14 @@ test(NAME commitGraph)
 test(NAME indexRefresh)
 test(NAME hook)
 test(NAME signing)
+test(NAME filterProcess)
+
+# A long-running filter for filterProcess.
+add_executable(test_filter_server filterServer.cpp)
+add_dependencies(test_filterProcess test_filter_server)
+target_compile_definitions(
+  test_filterProcess
+  PRIVATE FILTER_SERVER="$<TARGET_FILE:test_filter_server>")
 
 # Test case not compatible with Windows
 if(NOT WIN32)

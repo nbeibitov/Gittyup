@@ -15,6 +15,11 @@ namespace git {
 class Filter {
 public:
   static void init();
+
+  // Stop the long-running filters that this thread started. They keep the
+  // working directory of their repository, which can't be removed on
+  // Windows while they run. They start again when they are needed.
+  static void stopProcesses();
 };
 
 } // namespace git
