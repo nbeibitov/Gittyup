@@ -34,6 +34,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QMenu>
+#include <QSettings>
 #include <QPainter>
 #include <QPainterPath>
 #include <QSet>
@@ -160,6 +161,7 @@ public:
   }
 
   git::Reference reference() const { return mRef; }
+  QString pathspec() const { return mPathspec; }
 
   git::Diff status() const {
     if (!mStatus.isFinished())
@@ -1720,11 +1722,16 @@ void CommitList::selectFirstCommit(bool spontaneous) {
 
 void CommitList::selectCommitRelative(int offset) {
   QModelIndexList indices = selectionModel()->selectedIndexes();
+  if (indices.isEmpty())
+    return;
   QModelIndex index = indices[0];
   if (!index.isValid()) {
     return;
   }
-  QModelIndex new_index = model()->index(index.row() + offset, index.column());
+  QModelIndex new_index =
+      branchNavigation() ? branchRow(index.row(), offset > 0) : QModelIndex();
+  if (!new_index.isValid())
+    new_index = model()->index(index.row() + offset, index.column());
   if (!new_index.isValid()) {
     return;
   }
@@ -2510,6 +2517,97 @@ bool CommitList::selectDate(const QDateTime &date) {
       return true;
     }
   }
+}
+
+namespace {
+
+const QString kBranchNavigationKey = "history/branchNavigation";
+
+} // namespace
+
+bool CommitList::branchNavigation() {
+  return QSettings().value(kBranchNavigationKey, false).toBool();
+}
+
+void CommitList::setBranchNavigation(bool enabled) {
+  QSettings().setValue(kBranchNavigationKey, enabled);
+}
+
+QModelIndex CommitList::branchRow(int row, bool down) {
+  // Not for lists of a path or a search.
+  auto commits = qobject_cast<CommitModel *>(model());
+  if (!commits || !commits->pathspec().isEmpty())
+    return QModelIndex();
+
+  git::Reference ref = commits->reference();
+  git::Repository repo = RepoView::parentView(this)->repo();
+  git::Commit tip = ref.isValid() ? ref.target() : repo.head().target();
+  if (!tip.isValid())
+    return QModelIndex();
+
+  // The rows of the loaded commits.
+  QHash<git::Id, int> rows;
+  auto addRows = [&rows, commits](int from) {
+    for (int i = from; i < commits->rowCount(); ++i) {
+      git::Commit commit =
+          commits->index(i, 0).data(CommitRole).value<git::Commit>();
+      if (commit.isValid())
+        rows.insert(commit.id(), i);
+    }
+  };
+  addRows(0);
+
+  // Follow the first parents from the tip, whose rows go down.
+  int above = -1;
+  for (git::Commit commit = tip; commit.isValid();) {
+    // Commits above the row are loaded already.
+    int line = rows.value(commit.id(), -1);
+    while (line < 0 && down) {
+      int count = commits->rowCount();
+      if (!fetchMoreRows(commits))
+        break;
+      addRows(count);
+      line = rows.value(commit.id(), -1);
+    }
+
+    if (line < 0)
+      break; // not in the list
+
+    if (down && line > row)
+      return commits->index(line, 0);
+    if (!down && line >= row)
+      break;
+    above = line;
+
+    QList<git::Commit> parents = commit.parents();
+    commit = parents.isEmpty() ? git::Commit() : parents.first();
+  }
+
+  if (!down && above >= 0)
+    return commits->index(above, 0);
+
+  // The uncommitted changes are above HEAD.
+  QModelIndex status = commits->index(0, 0);
+  if (!down && row > 0 && (!ref.isValid() || ref.isHead()) &&
+      !status.data(CommitRole).value<git::Commit>().isValid())
+    return status;
+
+  return commits->index(row, 0); // stay
+}
+
+QModelIndex CommitList::moveCursor(CursorAction action,
+                                   Qt::KeyboardModifiers modifiers) {
+  // Only plain moves, not extending a selection.
+  QModelIndex current = currentIndex();
+  if (branchNavigation() && current.isValid() &&
+      !(modifiers & Qt::ShiftModifier) &&
+      (action == MoveUp || action == MoveDown)) {
+    QModelIndex index = branchRow(current.row(), action == MoveDown);
+    if (index.isValid())
+      return index;
+  }
+
+  return QListView::moveCursor(action, modifiers);
 }
 
 bool CommitList::isOnSelectedLine(const git::Commit &commit) const {

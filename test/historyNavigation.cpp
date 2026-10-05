@@ -17,6 +17,7 @@
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
 #include <QFile>
+#include <QScopeGuard>
 #include <QSplitter>
 
 using namespace QTest;
@@ -35,6 +36,7 @@ private slots:
   void selectedLine();
   void landmarks();
   void panesKeepTheirSize();
+  void branchNavigation();
 
 private:
   git::Commit commitFile(const QString &name, const QString &content);
@@ -245,6 +247,49 @@ void TestHistoryNavigation::panesKeepTheirSize() {
     QTest::qWait(100);
     QCOMPARE(sizes(), before);
   }
+}
+
+// The arrow keys skip the commits of other branches in this mode.
+void TestHistoryNavigation::branchNavigation() {
+  // The mode is a setting of the user.
+  bool enabled = CommitList::branchNavigation();
+  CommitList::setBranchNavigation(true);
+  auto restore = qScopeGuard([enabled] {
+    CommitList::setBranchNavigation(enabled);
+  });
+
+  mList->setFocus();
+  select(mM);
+  keyClick(mList, Qt::Key_Down);
+  QCOMPARE(selected(), mB);
+  keyClick(mList, Qt::Key_Down);
+  QCOMPARE(selected(), mA); // not mC of the merged branch
+  keyClick(mList, Qt::Key_Down);
+  QCOMPARE(selected(), mA); // the end of the branch
+
+  keyClick(mList, Qt::Key_Up);
+  QCOMPARE(selected(), mB);
+  keyClick(mList, Qt::Key_Up);
+  QCOMPARE(selected(), mM);
+
+  // From a commit of another branch to the next one of this branch.
+  select(mC);
+  keyClick(mList, Qt::Key_Down);
+  QCOMPARE(selected(), mA);
+
+  // The shortcuts of the list do the same.
+  select(mM);
+  mList->selectCommitRelative(1);
+  QCOMPARE(selected(), mB);
+  mList->selectCommitRelative(-1);
+  QCOMPARE(selected(), mM);
+
+  // Without the mode, every row is visited.
+  CommitList::setBranchNavigation(false);
+  select(mB);
+  int row = mList->currentIndex().row();
+  keyClick(mList, Qt::Key_Down);
+  QCOMPARE(mList->currentIndex().row(), row + 1);
 }
 
 TEST_MAIN(TestHistoryNavigation)

@@ -276,6 +276,9 @@ static Hotkey secondParentHotkey = HotkeyManager::registerHotkey(
 static Hotkey childHotkey = HotkeyManager::registerHotkey(
     "Alt+Up", "history/child", "History/Child");
 
+static Hotkey branchNavigationHotkey = HotkeyManager::registerHotkey(
+    nullptr, "history/branchNavigation", "History/Move Along Current Branch");
+
 static Hotkey olderMergeHotkey = HotkeyManager::registerHotkey(
     nullptr, "history/olderMerge", "History/Older Merge");
 
@@ -888,6 +891,14 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
       QApplication::beep();
   });
 
+  // Let the arrow keys skip the commits of other branches.
+  mBranchNavigation = historyMenu->addAction(tr("Move Along Current Branch"));
+  branchNavigationHotkey.use(mBranchNavigation);
+  mBranchNavigation->setCheckable(true);
+  mBranchNavigation->setChecked(CommitList::branchNavigation());
+  connect(mBranchNavigation, &QAction::toggled,
+          [](bool checked) { CommitList::setBranchNavigation(checked); });
+
   // Jump to landmarks of the history.
   historyMenu->addSeparator();
 
@@ -1280,6 +1291,9 @@ void MenuBar::updateHistory() {
   mChild->setEnabled(view != nullptr);
   for (QAction *action : mJumps)
     action->setEnabled(view != nullptr);
+
+  // Other windows may have changed it.
+  mBranchNavigation->setChecked(CommitList::branchNavigation());
 }
 
 void MenuBar::updateWindow() {

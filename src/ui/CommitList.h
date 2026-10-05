@@ -86,6 +86,12 @@ public:
 
   // Select the newest commit that was committed at or before the date.
   bool selectDate(const QDateTime &date);
+
+  // In this mode the arrow keys move only along the branch of the list:
+  // the line of first parents from the tip of the selected reference. It
+  // applies to all lists and is remembered.
+  static bool branchNavigation();
+  static void setBranchNavigation(bool enabled);
   bool selectRange(const QString &range, const QString &file = QString(),
                    bool spontaneous = false);
   void suppressResetWalker(bool suppress);
@@ -125,8 +131,14 @@ protected:
   void mouseReleaseEvent(QMouseEvent *event) override;
   void leaveEvent(QEvent *) override;
   void paintEvent(QPaintEvent *event) override;
+  QModelIndex moveCursor(CursorAction action,
+                         Qt::KeyboardModifiers modifiers) override;
 
 private:
+  // The next row on the branch below or above the row, the row itself if
+  // there is none, or an invalid index if the mode doesn't apply.
+  QModelIndex branchRow(int row, bool down);
+
   void storeSelection();
   void restoreSelection();
   void updateModel();

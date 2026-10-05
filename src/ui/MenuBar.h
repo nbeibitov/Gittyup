@@ -141,6 +141,7 @@ private:
   QAction *mSecondParent;
   QAction *mChild;
   QList<QAction *> mJumps;
+  QAction *mBranchNavigation;
 
   // Window
   QAction *mPrevTab;
