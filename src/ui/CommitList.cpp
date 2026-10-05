@@ -2435,9 +2435,14 @@ void CommitList::selectIndexes(const QItemSelection &selection,
   mSpontaneous = true;
   mFile = QString();
 
+  // The arrow keys move on from the selection, not from the row that was
+  // current before.
   QModelIndexList indexes = selection.indexes();
-  if (!indexes.isEmpty())
+  if (!indexes.isEmpty()) {
+    selectionModel()->setCurrentIndex(indexes.first(),
+                                      QItemSelectionModel::NoUpdate);
     scrollTo(indexes.first());
+  }
 }
 
 namespace {
