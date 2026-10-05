@@ -225,6 +225,12 @@ class CommitDetail : public QFrame {
   Q_OBJECT
 
 public:
+  // The width doesn't depend on the commit, so that selecting another one
+  // never resizes the panes of the window.
+  QSize minimumSizeHint() const override {
+    return QSize(0, QFrame::minimumSizeHint().height());
+  }
+
   CommitDetail(QWidget *parent = nullptr) : QFrame(parent) {
     mAuthorCommitterDate = new AuthorCommitterDate(this);
 
@@ -237,10 +243,14 @@ public:
             [this] { QApplication::clipboard()->setText(mId); });
 
     mRefs = new Badge(QList<Badge::Label>(), this);
+    // The links are cut instead of widening the view, which would move the
+    // panes of the window whenever another commit is selected.
     mParents = new QLabel(this);
     mParents->setTextInteractionFlags(kTextFlags);
+    mParents->setMinimumWidth(1);
     mChildren = new QLabel(this);
     mChildren->setTextInteractionFlags(kTextFlags);
+    mChildren->setMinimumWidth(1);
 
     QHBoxLayout *line3 = new QHBoxLayout;
     line3->addWidget(mHash);

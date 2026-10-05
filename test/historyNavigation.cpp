@@ -17,6 +17,7 @@
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
 #include <QFile>
+#include <QSplitter>
 
 using namespace QTest;
 
@@ -33,6 +34,7 @@ private slots:
   void mergeBase();
   void selectedLine();
   void landmarks();
+  void panesKeepTheirSize();
 
 private:
   git::Commit commitFile(const QString &name, const QString &content);
@@ -218,6 +220,31 @@ void TestHistoryNavigation::landmarks() {
   QVERIFY(mView->selectDate(QDateTime::currentDateTime().addDays(1)));
   QCOMPARE(selected(), mM);
   QVERIFY(!mView->selectDate(mA.committer().date().addDays(-1)));
+}
+
+// The details of a commit with long links to its parents and children
+// widened the view, which shrank the sidebar whenever such a commit was
+// selected.
+void TestHistoryNavigation::panesKeepTheirSize() {
+  mWindow->resize(1200, 800);
+  select(mM);
+  QTest::qWait(100);
+
+  auto sizes = [this] {
+    QList<QList<int>> result;
+    for (QSplitter *splitter : mWindow->findChildren<QSplitter *>()) {
+      if (splitter->isVisible())
+        result.append(splitter->sizes());
+    }
+    return result;
+  };
+
+  QList<QList<int>> before = sizes();
+  for (const git::Commit &commit : {mA, mB, mC, mM}) {
+    select(commit);
+    QTest::qWait(100);
+    QCOMPARE(sizes(), before);
+  }
 }
 
 TEST_MAIN(TestHistoryNavigation)
