@@ -3566,7 +3566,9 @@ bool RepoView::selectParent(int number) {
   return mCommits->selectParent(number);
 }
 
-bool RepoView::selectChild() { return mCommits->selectChild(); }
+bool RepoView::selectChild(bool choose) {
+  return mCommits->selectChild(choose);
+}
 
 QList<git::Commit> RepoView::childCommits(const git::Commit &commit) const {
   return mCommits->childCommits(commit);

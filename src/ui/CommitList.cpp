@@ -44,6 +44,7 @@
 #include <QStyledItemDelegate>
 #include <QTextLayout>
 #include <QtConcurrent>
+#include <algorithm>
 
 namespace {
 
@@ -1775,8 +1776,45 @@ bool CommitList::selectParent(int number) {
   if (!target.isValid() || target == index)
     return false;
 
+  // Child goes back here. A null id stands for the uncommitted changes.
+  mCameFrom.insert(parent.id(), commit.isValid() ? commit.id() : git::Id());
+
   selectIndexes(QItemSelection(target, target), QString(), true);
   return true;
+}
+
+bool CommitList::isOnBranch(const git::Commit &commit) {
+  auto commits = qobject_cast<CommitModel *>(model());
+  if (!commits)
+    return false;
+
+  git::Reference ref = commits->reference();
+  git::Repository repo = RepoView::parentView(this)->repo();
+  if (!commit.isValid())
+    return !ref.isValid() || ref.isHead();
+
+  QModelIndex index = findCommit(commit);
+  if (!index.isValid())
+    return false;
+
+  // The rows down to the commit, which the line passes in order.
+  QHash<git::Id, int> rows;
+  for (int row = 0; row <= index.row(); ++row) {
+    git::Commit tmp =
+        commits->index(row, 0).data(CommitRole).value<git::Commit>();
+    if (tmp.isValid())
+      rows.insert(tmp.id(), row);
+  }
+
+  git::Commit tip = ref.isValid() ? ref.target() : repo.head().target();
+  for (git::Commit tmp = tip; tmp.isValid() && rows.contains(tmp.id());) {
+    if (tmp == commit)
+      return true;
+    QList<git::Commit> parents = tmp.parents();
+    tmp = parents.isEmpty() ? git::Commit() : parents.first();
+  }
+
+  return false;
 }
 
 QList<git::Commit> CommitList::childCommits(const git::Commit &commit) {
@@ -1805,7 +1843,7 @@ QList<git::Commit> CommitList::childCommits(const git::Commit &commit) {
   return result;
 }
 
-bool CommitList::selectChild() {
+bool CommitList::selectChild(bool choose) {
   QModelIndex index = currentRow(selectionModel());
   if (!index.isValid())
     return false;
@@ -1818,19 +1856,77 @@ bool CommitList::selectChild() {
   if (children.isEmpty())
     return false;
 
-  // Let the user choose a line where the history branches off.
   git::Commit child = children.first();
-  if (children.size() > 1) {
-    QMenu menu(this);
+  bool known = false;
+  if (!choose && children.size() > 1 && mCameFrom.contains(commit.id())) {
+    // Go back the way the last move to this commit came.
+    git::Id from = mCameFrom.value(commit.id());
     for (const git::Commit &option : children) {
-      QString text = option.isValid() ? QString("%1  %2").arg(
-                                            option.shortId(), option.summary())
-                                      : tr("Uncommitted changes");
-      menu.addAction(text)->setData(QVariant::fromValue(option));
+      if (option.isValid() ? option.id() == from : from.isNull()) {
+        child = option;
+        known = true;
+        break;
+      }
+    }
+  }
+
+  // Let the user choose a line where the history branches off.
+  if (!known && (children.size() > 1 || choose)) {
+    // The child on the current branch first, then the ones that continue a
+    // line of first parents, then the merges of this commit, each in the
+    // order of the list.
+    struct Option {
+      git::Commit commit;
+      bool onBranch;
+      bool continues;
+    };
+
+    QList<Option> options;
+    for (const git::Commit &option : children) {
+      bool continues =
+          !option.isValid() || option.parents().first() == commit;
+      options.append({option, isOnBranch(option), continues});
     }
 
-    QPoint pos = visualRect(index).bottomLeft();
-    QAction *action = menu.exec(viewport()->mapToGlobal(pos));
+    std::stable_sort(options.begin(), options.end(),
+                     [](const Option &lhs, const Option &rhs) {
+                       if (lhs.onBranch != rhs.onBranch)
+                         return lhs.onBranch;
+                       return lhs.continues && !rhs.continues;
+                     });
+
+    QMenu menu(this);
+    QAction *first = nullptr;
+    bool merges = false;
+    for (const Option &option : options) {
+      if (!option.continues && !merges) {
+        merges = true;
+        menu.addSection(tr("Merged Into"));
+      }
+
+      QString text = option.commit.isValid()
+                         ? QString("%1  %2").arg(option.commit.shortId(),
+                                                 option.commit.summary())
+                         : tr("Uncommitted changes");
+      if (option.onBranch)
+        text = tr("%1  (current branch)").arg(text);
+
+      QAction *action = menu.addAction(text);
+      action->setData(QVariant::fromValue(option.commit));
+      if (option.onBranch) {
+        QFont font = action->font();
+        font.setBold(true);
+        action->setFont(font);
+      }
+
+      if (!first)
+        first = action;
+    }
+
+    // Enter takes the first one.
+    QPoint pos = viewport()->mapToGlobal(visualRect(index).bottomLeft());
+    menu.setActiveAction(first);
+    QAction *action = menu.exec(pos, first);
     if (!action)
       return true; // canceled
     child = action->data().value<git::Commit>();

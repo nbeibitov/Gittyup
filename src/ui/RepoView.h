@@ -87,7 +87,7 @@ public:
 
   // Follow a line of the history from the selected commit.
   bool selectParent(int number = 0);
-  bool selectChild();
+  bool selectChild(bool choose = false);
 
   // The children of the commit in the commit list.
   QList<git::Commit> childCommits(const git::Commit &commit) const;

@@ -276,6 +276,9 @@ static Hotkey secondParentHotkey = HotkeyManager::registerHotkey(
 static Hotkey childHotkey = HotkeyManager::registerHotkey(
     "Alt+Up", "history/child", "History/Child");
 
+static Hotkey chooseChildHotkey = HotkeyManager::registerHotkey(
+    "Alt+Shift+Up", "history/chooseChild", "History/Choose Child");
+
 static Hotkey branchNavigationHotkey = HotkeyManager::registerHotkey(
     nullptr, "history/branchNavigation", "History/Move Along Current Branch");
 
@@ -891,6 +894,14 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
       QApplication::beep();
   });
 
+  mChooseChild = historyMenu->addAction(tr("Choose Child..."));
+  chooseChildHotkey.use(mChooseChild);
+  mChooseChild->setEnabled(false);
+  connect(mChooseChild, &QAction::triggered, [this] {
+    if (!view()->selectChild(true))
+      QApplication::beep();
+  });
+
   // Let the arrow keys skip the commits of other branches.
   mBranchNavigation = historyMenu->addAction(tr("Move Along Current Branch"));
   branchNavigationHotkey.use(mBranchNavigation);
@@ -1289,6 +1300,7 @@ void MenuBar::updateHistory() {
   mParent->setEnabled(view != nullptr);
   mSecondParent->setEnabled(view != nullptr);
   mChild->setEnabled(view != nullptr);
+  mChooseChild->setEnabled(view != nullptr);
   for (QAction *action : mJumps)
     action->setEnabled(view != nullptr);
 

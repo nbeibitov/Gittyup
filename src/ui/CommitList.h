@@ -13,6 +13,7 @@
 #include "git/Reference.h"
 #include "git/Id.h"
 #include <QListView>
+#include <QHash>
 #include <QSet>
 
 class QDateTime;
@@ -63,7 +64,11 @@ public:
   // changes are a child of HEAD. Return false if there is no such commit in
   // the list, e.g. because the list is filtered.
   bool selectParent(int number = 0);
-  bool selectChild();
+
+  // Where the history branches off, go back to the child that the last
+  // move to a parent came from, or else let the user choose; choose always
+  // asks. The child on the current branch is offered first.
+  bool selectChild(bool choose = false);
 
   // The children of the commit among the rows above it, where a
   // topological order puts them. An invalid commit in the result stands for
@@ -138,6 +143,13 @@ private:
   // The next row on the branch below or above the row, the row itself if
   // there is none, or an invalid index if the mode doesn't apply.
   QModelIndex branchRow(int row, bool down);
+
+  // Whether the loaded commit is on the line of first parents from the tip
+  // of the selected reference. The uncommitted changes are on HEAD's.
+  bool isOnBranch(const git::Commit &commit);
+
+  // The child that a move to the parent came from, by parent.
+  QHash<git::Id, git::Id> mCameFrom;
 
   void storeSelection();
   void restoreSelection();

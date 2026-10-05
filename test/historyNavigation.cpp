@@ -16,7 +16,10 @@
 #include "ui/CommitList.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
+#include <QApplication>
 #include <QFile>
+#include <QMenu>
+#include <QTimer>
 #include <QScopeGuard>
 #include <QSplitter>
 
@@ -37,6 +40,8 @@ private slots:
   void landmarks();
   void panesKeepTheirSize();
   void branchNavigation();
+  void childGoesBack();
+  void childChoices();
 
 private:
   git::Commit commitFile(const QString &name, const QString &content);
@@ -290,6 +295,65 @@ void TestHistoryNavigation::branchNavigation() {
   int row = mList->currentIndex().row();
   keyClick(mList, Qt::Key_Down);
   QCOMPARE(mList->currentIndex().row(), row + 1);
+}
+
+// Child goes back the way Parent came, without asking.
+void TestHistoryNavigation::childGoesBack() {
+  select(mB);
+  QVERIFY(mView->selectParent());
+  QCOMPARE(selected(), mA);
+  QVERIFY(mView->selectChild());
+  QCOMPARE(selected(), mB);
+
+  select(mC);
+  QVERIFY(mView->selectParent());
+  QCOMPARE(selected(), mA);
+  QVERIFY(mView->selectChild());
+  QCOMPARE(selected(), mC);
+}
+
+// The child on the current branch comes first, merges come last.
+void TestHistoryNavigation::childChoices() {
+  struct Item {
+    QString text;
+    bool bold;
+    bool section;
+  };
+
+  // Read the menu, then take the first child with Enter.
+  QList<Item> items;
+  auto readMenu = [&items] {
+    QTimer::singleShot(200, [&items] {
+      QMenu *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+      if (!menu)
+        return;
+      for (QAction *action : menu->actions())
+        items.append({action->text(), action->font().bold(),
+                      action->isSeparator()});
+      QTest::keyClick(menu, Qt::Key_Return);
+    });
+  };
+
+  select(mA);
+  readMenu();
+  QVERIFY(mView->selectChild(true));
+  QCOMPARE(items.size(), 2);
+  QVERIFY2(items.at(0).text.startsWith(mB.shortId()),
+           qPrintable(items.at(0).text));
+  QVERIFY(items.at(0).bold); // the current branch
+  QVERIFY(items.at(1).text.startsWith(mC.shortId()));
+  QVERIFY(!items.at(1).bold);
+  QCOMPARE(selected(), mB);
+
+  // M merges C.
+  items.clear();
+  select(mC);
+  readMenu();
+  QVERIFY(mView->selectChild(true));
+  QCOMPARE(items.size(), 2);
+  QVERIFY(items.at(0).section);
+  QVERIFY(items.at(1).text.startsWith(mM.shortId()));
+  QCOMPARE(selected(), mM);
 }
 
 TEST_MAIN(TestHistoryNavigation)

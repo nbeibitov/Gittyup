@@ -140,6 +140,7 @@ private:
   QAction *mParent;
   QAction *mSecondParent;
   QAction *mChild;
+  QAction *mChooseChild;
   QList<QAction *> mJumps;
   QAction *mBranchNavigation;
 
