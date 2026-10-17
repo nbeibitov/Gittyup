@@ -1872,7 +1872,7 @@ void RepoView::startGitRebase(const QStringList &args, LogEntry *entry,
 
           QDialog *dialog;
           if (kind == GitEditor::Kind::Sequence) {
-            RebaseTodoDialog *todo = new RebaseTodoDialog(text, this);
+            RebaseTodoDialog *todo = new RebaseTodoDialog(text, mRepo, this);
             connect(todo, &QDialog::accepted, this,
                     [todo, save] { save(todo->todo()); });
             dialog = todo;

@@ -16,6 +16,7 @@
 #include "git/Repository.h"
 #include <QDialog>
 
+class CommitContentView;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -84,6 +85,7 @@ private:
   QComboBox *mAction;
   QLabel *mMessageLabel;
   QPlainTextEdit *mMessage;
+  CommitContentView *mContent;
   QCheckBox *mAutostash;
   QCheckBox *mKeepEmpty;
   QCheckBox *mCommitterDate;

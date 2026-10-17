@@ -8,6 +8,8 @@
 //
 
 #include "RebaseTodoDialog.h"
+#include "CommitContentView.h"
+#include "git/Commit.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFontDatabase>
@@ -18,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSplitter>
 #include <QStandardItemModel>
 #include <QTabWidget>
 #include <QTreeWidget>
@@ -82,8 +85,10 @@ bool isTransparent(const QString &command) {
 
 } // namespace
 
-RebaseTodoDialog::RebaseTodoDialog(const QString &todo, QWidget *parent)
-    : QDialog(parent) {
+RebaseTodoDialog::RebaseTodoDialog(const QString &todo,
+                                   const git::Repository &repo,
+                                   QWidget *parent)
+    : QDialog(parent), mRepo(repo) {
   setAttribute(Qt::WA_DeleteOnClose);
   setWindowTitle(tr("Interactive Rebase"));
   resize(760, 520);
@@ -141,13 +146,28 @@ RebaseTodoDialog::RebaseTodoDialog(const QString &todo, QWidget *parent)
   stepsLayout->addLayout(actions);
   stepsLayout->addWidget(mList, 1);
 
+  // The content of the current commit beside the steps.
+  QWidget *stepsTab = steps;
+  if (mRepo.isValid()) {
+    mContent = new CommitContentView(this);
+    mContent->setObjectName("RebaseTodoContent");
+    QSplitter *splitter = new QSplitter(Qt::Horizontal, this);
+    splitter->setChildrenCollapsible(false);
+    splitter->addWidget(steps);
+    splitter->addWidget(mContent);
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 1);
+    stepsTab = splitter;
+    resize(1280, 720);
+  }
+
   mText = new QPlainTextEdit(this);
   mText->setObjectName("RebaseTodoText");
   mText->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
   mText->setLineWrapMode(QPlainTextEdit::NoWrap);
 
   mTabs = new QTabWidget(this);
-  mTabs->addTab(steps, tr("Steps"));
+  mTabs->addTab(stepsTab, tr("Steps"));
   mTabs->addTab(mText, tr("Text"));
   connect(mTabs, &QTabWidget::currentChanged, this, [this](int index) {
     if (index == 1) {
@@ -196,6 +216,8 @@ RebaseTodoDialog::RebaseTodoDialog(const QString &todo, QWidget *parent)
 
   connect(mList, &QTreeWidget::currentItemChanged, this,
           &RebaseTodoDialog::updateAction);
+  connect(mList, &QTreeWidget::currentItemChanged, this,
+          &RebaseTodoDialog::updateContent);
 
   // Drag and drop moves rows by removing and inserting them.
   connect(mList->model(), &QAbstractItemModel::rowsInserted, this,
@@ -429,6 +451,25 @@ void RebaseTodoDialog::updateAction() {
   int index = mAction->findData(command == "merge" ? QString("pick") : command);
   if (index >= 0)
     mAction->setCurrentIndex(index);
+}
+
+void RebaseTodoDialog::updateContent() {
+  if (!mContent)
+    return;
+
+  QTreeWidgetItem *item = mList->currentItem();
+  QString id = item ? item->text(CommitColumn) : QString();
+  if (id.isEmpty()) {
+    mContent->setCommit(
+        git::Commit(),
+        item ? tr("This step doesn't change files: it marks or selects a "
+                  "commit to build the merges on.")
+             : tr("Select a commit to see its content."));
+    return;
+  }
+
+  git::Commit commit = mRepo.lookupCommit(id);
+  mContent->setCommit(commit, tr("The commit %1 was not found.").arg(id));
 }
 
 void RebaseTodoDialog::moveSelection(int delta) {

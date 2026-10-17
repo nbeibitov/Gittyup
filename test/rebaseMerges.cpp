@@ -8,6 +8,7 @@
 //
 
 #include "Test.h"
+#include "dialogs/CommitContentView.h"
 #include "dialogs/GitMessageDialog.h"
 #include "dialogs/InteractiveRebaseDialog.h"
 #include "dialogs/RebaseTodoDialog.h"
@@ -44,6 +45,7 @@ private slots:
   void todoDialogUi();
   void messageDialog();
   void containsMerge();
+  void commitContent();
 
   void rebaseWithDialogs();
   void cancelKeepsBranch();
@@ -342,6 +344,55 @@ void TestRebaseMerges::containsMerge() {
   QVERIFY(!InteractiveRebase::containsMerge(mRepo, head.parents().first()));
   QVERIFY(InteractiveRebase::containsMerge(
       mRepo, mRepo.lookupCommit(mOther).parents().first()));
+}
+
+void TestRebaseMerges::commitContent() {
+  createMergeHistory();
+  Commit b = mRepo.head().target();
+  Commit merge = b.parents().first();
+  Commit a = merge.parents().first();
+
+  const QString kMinus = QString(QChar(0x2212)) + "0";
+
+  // Git's steps: a commit, a bookmark and a merge.
+  QString todo =
+      QString("pick %1 A\nlabel side\nmerge -C %2 side # Merge side\n")
+          .arg(a.shortId(), merge.shortId());
+  RebaseTodoDialog dialog(todo, mRepo);
+  QTreeWidget *list = dialog.findChild<QTreeWidget *>("RebaseTodoList");
+  CommitContentView *content =
+      dialog.findChild<CommitContentView *>("RebaseTodoContent");
+  QVERIFY(list && content);
+
+  list->setCurrentItem(list->topLevelItem(0));
+  QCOMPARE(content->commit().id(), a.id());
+  QCOMPARE(content->files(),
+           QStringList({QString("A  a.txt  +1 %1").arg(kMinus)}));
+  QVERIFY(content->patch().contains("\n+a"));
+
+  list->setCurrentItem(list->topLevelItem(1));
+  QVERIFY(!content->commit().isValid());
+  QVERIFY(content->files().isEmpty());
+
+  // A merge shows what it adds to its first parent.
+  list->setCurrentItem(list->topLevelItem(2));
+  QCOMPARE(content->commit().id(), merge.id());
+  QCOMPARE(content->files(),
+           QStringList({QString("A  s.txt  +1 %1").arg(kMinus)}));
+
+  // Without a repository there is no content.
+  RebaseTodoDialog plain(todo);
+  QVERIFY(!plain.findChild<CommitContentView *>("RebaseTodoContent"));
+
+  // The dialog of Gittyup.
+  InteractiveRebaseDialog own(mRepo, merge);
+  QTreeWidget *ownList = own.findChild<QTreeWidget *>("InteractiveRebaseList");
+  CommitContentView *ownContent =
+      own.findChild<CommitContentView *>("InteractiveRebaseContent");
+  QVERIFY(ownList && ownContent);
+  QCOMPARE(ownList->topLevelItemCount(), 1);
+  QCOMPARE(ownContent->commit().id(), b.id());
+  QVERIFY(ownContent->patch().contains("b.txt"));
 }
 
 void TestRebaseMerges::rebaseWithDialogs() {

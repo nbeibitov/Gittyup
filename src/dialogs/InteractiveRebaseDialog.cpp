@@ -8,6 +8,7 @@
 //
 
 #include "InteractiveRebaseDialog.h"
+#include "CommitContentView.h"
 #include "git/Branch.h"
 #include "git/Config.h"
 #include "git/Reference.h"
@@ -192,6 +193,16 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
   splitter->setStretchFactor(0, 3);
   splitter->setStretchFactor(1, 1);
 
+  // The content of the current commit beside the list.
+  mContent = new CommitContentView(this);
+  mContent->setObjectName("InteractiveRebaseContent");
+  QSplitter *content = new QSplitter(Qt::Horizontal, this);
+  content->setChildrenCollapsible(false);
+  content->addWidget(splitter);
+  content->addWidget(mContent);
+  content->setStretchFactor(0, 1);
+  content->setStretchFactor(1, 1);
+
   mAutostash = new QCheckBox(tr("Autostash uncommitted changes"), this);
   mAutostash->setChecked(repo.gitConfig().value<bool>("rebase.autoStash"));
   mKeepEmpty = new QCheckBox(tr("Keep commits that become empty"), this);
@@ -217,7 +228,7 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
   layout->addLayout(range);
   layout->addWidget(hint);
   layout->addLayout(actions);
-  layout->addWidget(splitter, 1);
+  layout->addWidget(content, 1);
   layout->addLayout(options);
   layout->addWidget(mStatus);
   layout->addWidget(buttons);
@@ -271,7 +282,7 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
   updateRange();
   updateMessageEditor();
   updateState();
-  resize(860, 600);
+  resize(1280, 720);
 }
 
 QList<git::InteractiveRebase::Step> InteractiveRebaseDialog::steps() const {
@@ -523,6 +534,11 @@ void InteractiveRebaseDialog::updateItem(QTreeWidgetItem *item) {
 void InteractiveRebaseDialog::updateMessageEditor() {
   QTreeWidgetItem *item = mList->currentItem();
   mUpdatingMessage = true;
+
+  mContent->setCommit(
+      item ? mRepo.lookupCommit(item->data(0, kIdRole).toString())
+           : git::Commit(),
+      tr("Select a commit to see its content."));
 
   if (!item) {
     mMessageLabel->setText(tr("Commit message:"));

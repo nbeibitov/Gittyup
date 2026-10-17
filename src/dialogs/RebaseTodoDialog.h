@@ -10,8 +10,10 @@
 #ifndef REBASETODODIALOG_H
 #define REBASETODODIALOG_H
 
+#include "git/Repository.h"
 #include <QDialog>
 
+class CommitContentView;
 class QComboBox;
 class QLabel;
 class QPlainTextEdit;
@@ -21,12 +23,15 @@ class QTreeWidget;
 class QTreeWidgetItem;
 
 // Edits the todo list that 'git rebase -i' writes, including the label,
-// reset and merge commands of --rebase-merges.
+// reset and merge commands of --rebase-merges. With a repository, the
+// content of the current commit is shown beside the steps.
 class RebaseTodoDialog : public QDialog {
   Q_OBJECT
 
 public:
-  RebaseTodoDialog(const QString &todo, QWidget *parent = nullptr);
+  RebaseTodoDialog(const QString &todo,
+                   const git::Repository &repo = git::Repository(),
+                   QWidget *parent = nullptr);
 
   // The edited todo list.
   QString todo() const;
@@ -53,12 +58,16 @@ private:
   void setSelectedCommand(const QString &command);
   void moveSelection(int delta);
   void updateAction();
+  void updateContent();
   void updateState();
+
+  git::Repository mRepo;
 
   QTabWidget *mTabs;
   QTreeWidget *mList;
   QComboBox *mAction;
   QPlainTextEdit *mText;
+  CommitContentView *mContent = nullptr;
   QLabel *mStatus;
   QPushButton *mAccept;
 };
