@@ -47,6 +47,7 @@ private slots:
   void pathHistoryInBackground();
   void topologicalFindsCommit();
   void chooseHeadBranch();
+  void localAndRemoteBranches();
   void cleanupTestCase();
 
 private:
@@ -535,6 +536,68 @@ void TestCommitListStatus::chooseHeadBranch() {
   QTRY_COMPARE_WITH_TIMEOUT(mView->commits().value(0).id(), head.id(), 60000);
 
   writeFile("a.txt", "changed\n");
+}
+
+void TestCommitListStatus::localAndRemoteBranches() {
+  // A commit only on a local branch and one only on a remote branch.
+  git_repository *repo = nullptr;
+  QVERIFY(!git_repository_open(&repo, mRepo->workdir().path().toUtf8()));
+  git_signature *sig = nullptr;
+  QVERIFY(!git_signature_now(&sig, "Test", "test@example.com"));
+  git_oid oid;
+  QVERIFY(!git_reference_name_to_id(&oid, repo, "HEAD"));
+  git_commit *tip = nullptr;
+  QVERIFY(!git_commit_lookup(&tip, repo, &oid));
+  git_tree *tree = nullptr;
+  QVERIFY(!git_commit_tree(&tree, tip));
+  const git_commit *parents[] = {tip};
+  git_oid local, remote;
+  QVERIFY(!git_commit_create(&local, repo, "refs/heads/localonly", sig, sig,
+                             nullptr, "local only", tree, 1, parents));
+  QVERIFY(!git_commit_create(&remote, repo, "refs/remotes/origin/remoteonly",
+                             sig, sig, nullptr, "remote only", tree, 1,
+                             parents));
+  git_signature_free(sig);
+  git_tree_free(tree);
+  git_commit_free(tip);
+  git_repository_free(repo);
+  emit mRepo->notifier()->referenceUpdated(mRepo->head());
+
+  auto summaries = [this] {
+    QStringList result;
+    QAbstractItemModel *model = mCommits->model();
+    for (int row = 0; row < model->rowCount(); ++row) {
+      git::Commit commit =
+          model->index(row, 0).data(CommitList::CommitRole).value<git::Commit>();
+      result.append(commit.isValid() ? commit.summary() : QString("status"));
+    }
+    return result;
+  };
+  auto show = [this](CommitList::RefsFilter filter) {
+    mRepo->appConfig().setValue(ConfigKeys::kRefsKey, (int)filter);
+    mCommits->resetSettings();
+    QTest::qWait(100);
+    QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  };
+
+  show(CommitList::RefsFilter::AllRefs);
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("remote only"), 60000);
+  QVERIFY(summaries().contains("local only"));
+
+  // Local: no remote-only commit, the status row stays.
+  show(CommitList::RefsFilter::LocalRefs);
+  QTRY_VERIFY_WITH_TIMEOUT(!summaries().contains("remote only"), 60000);
+  QVERIFY(summaries().contains("local only"));
+  QCOMPARE(summaries().value(0), QString("status"));
+
+  // Remote: no local-only commit and no status row.
+  show(CommitList::RefsFilter::RemoteRefs);
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("remote only"), 60000);
+  QVERIFY2(!summaries().contains("local only"),
+           qPrintable(summaries().join(", ")));
+  QVERIFY(!summaries().contains("status"));
+
+  show(CommitList::RefsFilter::AllRefs);
 }
 
 void TestCommitListStatus::cleanupTestCase() {

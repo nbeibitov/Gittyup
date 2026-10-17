@@ -31,7 +31,7 @@ const QString kLinkFmt =
 bool showsAllRefs(const git::Repository &repo) {
   int filter = repo.appConfig().value<int>(
       ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::AllRefs);
-  return filter == (int)CommitList::RefsFilter::AllRefs;
+  return CommitList::showsAllRefs(static_cast<CommitList::RefsFilter>(filter));
 }
 
 QModelIndex findReference(QAbstractItemModel *model,

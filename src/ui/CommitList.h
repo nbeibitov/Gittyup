@@ -35,7 +35,13 @@ public:
     AllRefs,
     SelectedRef,
     SelectedRefIgnoreMerge,
+    // All references of one kind. Local includes tags.
+    LocalRefs,
+    RemoteRefs,
   };
+
+  // All references (or all of one kind) instead of the selected one.
+  static bool showsAllRefs(RefsFilter filter);
 
   CommitList(Index *index, QWidget *parent = nullptr);
 

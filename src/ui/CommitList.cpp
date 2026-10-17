@@ -713,8 +713,18 @@ private:
     if (git::Reference head = ctx.repo.head())
       result.head = head.target().id();
 
+    // Only remote branches: the working directory doesn't belong to them.
+    bool remoteOnly = (ctx.refsFilter == CommitList::RefsFilter::RemoteRefs);
+    QList<git::Reference> remotes;
+    if (remoteOnly) {
+      for (const git::Reference &ref : ctx.repo.refs()) {
+        if (ref.isRemoteBranch())
+          remotes.append(ref);
+      }
+    }
+
     // Update status row.
-    bool head = (!ctx.ref.isValid() || ctx.ref.isHead());
+    bool head = (!ctx.ref.isValid() || ctx.ref.isHead()) && remotes.isEmpty();
     bool valid = (!ctx.statusCheckFinished || ctx.statusDiff.isValid());
     if (ctx.showCleanStatus && head && valid && ctx.pathspec.isEmpty()) {
       QVector<Column> row;
@@ -727,20 +737,25 @@ private:
     }
 
     // Begin walking commits.
-    if (ctx.ref.isValid()) {
-      int sort = GIT_SORT_NONE;
-      if (ctx.graphVisible) {
-        sort |= GIT_SORT_TOPOLOGICAL;
-        if (ctx.sortDate)
-          sort |= GIT_SORT_TIME;
-      } else if (!ctx.sortDate) {
-        sort |= GIT_SORT_TOPOLOGICAL;
-      }
+    int sort = GIT_SORT_NONE;
+    if (ctx.graphVisible) {
+      sort |= GIT_SORT_TOPOLOGICAL;
+      if (ctx.sortDate)
+        sort |= GIT_SORT_TIME;
+    } else if (!ctx.sortDate) {
+      sort |= GIT_SORT_TOPOLOGICAL;
+    }
 
+    if (!remotes.isEmpty()) {
+      result.walker = remotes.first().walker(sort);
+      for (const git::Reference &ref : remotes)
+        result.walker.push(ref);
+    } else if (ctx.ref.isValid()) {
       result.walker = ctx.ref.walker(
           sort,
           ctx.refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
-      if (ctx.ref.isLocalBranch()) {
+      bool localOnly = (ctx.refsFilter == CommitList::RefsFilter::LocalRefs);
+      if (ctx.ref.isLocalBranch() && !localOnly) {
         // Add the upstream branch.
         if (git::Branch upstream = git::Branch(ctx.ref).upstream())
           result.walker.push(upstream);
@@ -752,9 +767,9 @@ private:
           result.walker.push(mergeHead);
       }
 
-      if (ctx.refsFilter == CommitList::RefsFilter::AllRefs) {
+      if (CommitList::showsAllRefs(ctx.refsFilter)) {
         for (const git::Reference &ref : ctx.repo.refs()) {
-          if (!ref.isStash())
+          if (!ref.isStash() && !(localOnly && ref.isRemoteBranch()))
             result.walker.push(ref);
         }
       }
@@ -1506,6 +1521,11 @@ static Hotkey selectCommitDownHotKey = HotkeyManager::registerHotkey(
 
 static Hotkey selectCommitUpHotKey = HotkeyManager::registerHotkey(
     "k", "commitList/selectCommitUp", "CommitList/Select Next Commit Up");
+
+bool CommitList::showsAllRefs(RefsFilter filter) {
+  return filter == RefsFilter::AllRefs || filter == RefsFilter::LocalRefs ||
+         filter == RefsFilter::RemoteRefs;
+}
 
 CommitList::CommitList(Index *index, QWidget *parent)
     : QListView(parent), mIndex(index) {

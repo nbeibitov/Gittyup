@@ -120,6 +120,11 @@ CommitToolBar::CommitToolBar(QWidget *parent) : QToolBar(parent) {
   SettingsMap<int> refsMap;
   refsMap.insert(tr("Show All Branches"),
                  {ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::AllRefs});
+  refsMap.insert(tr("Show Local Branches"),
+                 {ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::LocalRefs});
+  refsMap.insert(
+      tr("Show Remote Branches"),
+      {ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::RemoteRefs});
   refsMap.insert(
       tr("Show Selected Branch"),
       {ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::SelectedRef});
