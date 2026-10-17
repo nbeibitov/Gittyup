@@ -2431,7 +2431,52 @@ void RepoView::push(const git::Remote &rmt, const git::Reference &src,
     return;
   }
 
+  // The name of the upstream branch on the remote, e.g. before the branch
+  // was renamed.
+  QString merge;
+  if (upstream.isValid() && ref.isLocalBranch()) {
+    merge = mRepo.gitConfig().value<QString>(
+        QString("branch.%1.merge").arg(refName));
+    if (merge.startsWith("refs/heads/"))
+      merge = merge.mid(11);
+  }
+  bool otherName = !merge.isEmpty() && merge != refName;
+
+  // Like push.default=simple of git, don't push to an upstream branch of
+  // another name unless asked for.
+  QString pushDefault = mRepo.gitConfig().value<QString>("push.default");
+  if (otherName && dst.isEmpty() && !setUpstream &&
+      (pushDefault.isEmpty() || pushDefault == "simple")) {
+    LogEntry *err = entry->addEntry(
+        LogEntry::Error,
+        tr("The upstream branch '%1' has another name than the current "
+           "branch '%2'.")
+            .arg(upstream.name().toHtmlEscaped(), refName.toHtmlEscaped()));
+    QString hint1 =
+        tr("To push to '%1/%2' and track it from now on, "
+           "<a href='action:push?set-upstream=true&to=%3&ref=%4'>push and "
+           "set the upstream</a>. The branch '%5' stays on the remote.")
+            .arg(name.toHtmlEscaped(), refName.toHtmlEscaped(),
+                 name.toHtmlEscaped(), ref.qualifiedName().toHtmlEscaped(),
+                 upstream.name().toHtmlEscaped());
+    QString hint2 =
+        tr("To push to '%1' once, use <a href='action:push-to'>Push To</a>. "
+           "To always push to the upstream branch like before, set the git "
+           "configuration push.default to 'upstream'.")
+            .arg(upstream.name().toHtmlEscaped());
+    err->addEntry(LogEntry::Hint, hint1);
+    err->addEntry(LogEntry::Hint, hint2);
+    return;
+  }
+
+  // Setting the upstream pushes to the name of the branch, not to the
+  // current upstream.
+  QString target = dst;
+  if (target.isEmpty() && setUpstream && otherName)
+    target = ref.qualifiedName();
+
   if (!tags && upstream.isValid() && ref.target() == upstream.target() &&
+      !(setUpstream && otherName) &&
       (dst.isEmpty() || dst == ref.qualifiedName())) {
     entry->addEntry(tr("Everything up-to-date."));
     return;
@@ -2512,7 +2557,7 @@ void RepoView::push(const git::Remote &rmt, const git::Reference &src,
                                    const git::Reference &, const QString &,
                                    bool, bool) = &git::Remote::push;
   mWatcher->setFuture(
-      QtConcurrent::run(push, remote, mCallbacks, ref, dst, force, tags));
+      QtConcurrent::run(push, remote, mCallbacks, ref, target, force, tags));
 }
 
 bool RepoView::commit(const QString &message,

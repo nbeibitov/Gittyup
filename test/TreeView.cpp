@@ -6,6 +6,8 @@
 #include "ui/TreeProxy.h"
 #include "ui/FileContextMenu.h"
 #include "conf/Settings.h"
+#include "git/Branch.h"
+#include "log/LogEntry.h"
 
 #include <QTextEdit>
 
@@ -44,6 +46,7 @@ private slots:
   void discardFiles();
   void fileMergeCrash();
   void selectionSurvivesPush();
+  void pushToUpstreamOfOtherName();
   void dirtySubmoduleAndStagedSubmodule();
   void conflictedAndStagedFile();
 
@@ -333,6 +336,48 @@ void TestTreeView::selectionSurvivesPush() {
       Timeout(10000, "Diff view didn't get repopulated after the push");
   while (!repoView->diff().isValid())
     qWait(10);
+}
+
+void TestTreeView::pushToUpstreamOfOtherName() {
+  QTemporaryDir remoteDir;
+  QVERIFY(remoteDir.isValid());
+  git::Repository remoteRepo = git::Repository::init(remoteDir.path(), true);
+  QVERIFY(remoteRepo.isValid());
+
+  INIT_REPO("TreeViewCollapseCount.zip");
+
+  git::Remote remote = repo.addRemote("origin", remoteDir.path());
+  QVERIFY(remote.isValid());
+  repoView->push(remote, git::Reference(), QString(), true, false, false);
+  {
+    auto timeout = Timeout(10000, "Initial push didn't complete in time");
+    while (!git::Branch(repo.head()).upstream().isValid())
+      qWait(10);
+  }
+
+  // The renamed branch keeps tracking 'origin/master'.
+  git::Branch renamed = git::Branch(repo.head()).rename("renamed");
+  QVERIFY(renamed.isValid());
+  QCOMPARE(renamed.upstream().name(), QString("origin/master"));
+
+  // A plain push stops like 'git push' does.
+  repoView->push(remote, git::Reference(), QString(), false, false, false);
+  bool stopped = false;
+  for (LogEntry *entry : repoView->findChildren<LogEntry *>()) {
+    if (entry->kind() == LogEntry::Error &&
+        entry->text().contains("has another name"))
+      stopped = true;
+  }
+  QVERIFY(stopped);
+  QVERIFY(!remoteRepo.lookupRef("refs/heads/renamed").isValid());
+
+  // Setting the upstream pushes to the name of the branch and tracks it.
+  repoView->push(remote, git::Reference(), QString(), true, false, false);
+  auto timeout = Timeout(10000, "Push with upstream didn't complete in time");
+  while (git::Branch(repo.head()).upstream().name() != "origin/renamed")
+    qWait(10);
+  QVERIFY(remoteRepo.lookupRef("refs/heads/renamed").isValid());
+  QVERIFY(remoteRepo.lookupRef("refs/heads/master").isValid());
 }
 
 void TestTreeView::dirtySubmoduleAndStagedSubmodule() {
