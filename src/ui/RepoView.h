@@ -322,7 +322,9 @@ public:
              const git::Signature &committer, const QString &commitMessage);
 
   // reset
-  void promptToReset(const git::Commit &commit, git_reset_t type);
+  // The target names the reference the commit was chosen by, if any.
+  void promptToReset(const git::Commit &commit, git_reset_t type,
+                     const QString &target = QString());
   void reset(const git::Commit &commit, git_reset_t type,
              const git::Commit &commitToAmend = git::Commit());
 

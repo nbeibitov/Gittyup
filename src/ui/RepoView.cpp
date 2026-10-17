@@ -2874,7 +2874,8 @@ void RepoView::amend(const git::Commit &commit, const git::Signature &author,
   }
 }
 
-void RepoView::promptToReset(const git::Commit &commit, git_reset_t type) {
+void RepoView::promptToReset(const git::Commit &commit, git_reset_t type,
+                             const QString &target) {
   git::Branch head = mRepo.head();
   if (!head.isValid()) {
     QString title = tr("Reset");
@@ -2884,6 +2885,8 @@ void RepoView::promptToReset(const git::Commit &commit, git_reset_t type) {
   }
 
   QString id = commit.shortId();
+  if (!target.isEmpty())
+    id = QString("%1 (%2)").arg(target, id);
   QString title = tr("Reset");
   switch (type) {
     case GIT_RESET_SOFT:

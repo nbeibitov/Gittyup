@@ -339,6 +339,23 @@ void ReferenceView::contextMenuEvent(QContextMenuEvent *event) {
     }
   }
 
+  // Like 'git reset <ref>': the current branch moves to the commit of ref.
+  git::Reference head = view->repo().head();
+  if (!ref.isStash()) {
+    QMenu *reset =
+        menu.addMenu(tr("Reset Current Branch to %1").arg(ref.name()));
+    reset->addAction(tr("Soft"))->setData(GIT_RESET_SOFT);
+    reset->addAction(tr("Mixed"))->setData(GIT_RESET_MIXED);
+    reset->addAction(tr("Hard"))->setData(GIT_RESET_HARD);
+    connect(reset, &QMenu::triggered, [view, ref](QAction *action) {
+      git_reset_t type = static_cast<git_reset_t>(action->data().toInt());
+      view->promptToReset(ref.target(), type, ref.name());
+    });
+
+    reset->setEnabled(head.isValid() && head.isLocalBranch() && !ref.isHead() &&
+                      !view->repo().isBare());
+  }
+
   if (ref.isRemoteBranch()) {
     menu.addAction(tr("New Local Branch"), [this, ref] {
       QString local = ref.name().section('/', 1);

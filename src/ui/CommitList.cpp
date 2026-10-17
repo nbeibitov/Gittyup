@@ -2351,14 +2351,29 @@ void CommitList::contextMenuEvent(QContextMenuEvent *event) {
 
       menu.addSeparator();
 
-      QMenu *reset = menu.addMenu(tr("Reset"));
+      // Name the commit by a branch that points to it, like 'git reset <ref>'.
+      QString target;
+      for (const git::Reference &ref : all_branches) {
+        if (head.isValid() && ref.qualifiedName() == head.qualifiedName())
+          continue;
+        if (target.isEmpty() || ref.isLocalBranch())
+          target = ref.name();
+        if (ref.isLocalBranch())
+          break;
+      }
+
+      QMenu *reset = menu.addMenu(
+          tr("Reset Current Branch to %1")
+              .arg(target.isEmpty() ? commit.shortId() : target));
       reset->addAction(tr("Soft"))->setData(GIT_RESET_SOFT);
       reset->addAction(tr("Mixed"))->setData(GIT_RESET_MIXED);
       reset->addAction(tr("Hard"))->setData(GIT_RESET_HARD);
-      connect(reset, &QMenu::triggered, [view, commit](QAction *action) {
-        git_reset_t type = static_cast<git_reset_t>(action->data().toInt());
-        view->promptToReset(commit, type);
-      });
+      connect(reset, &QMenu::triggered,
+              [view, commit, target](QAction *action) {
+                git_reset_t type =
+                    static_cast<git_reset_t>(action->data().toInt());
+                view->promptToReset(commit, type, target);
+              });
 
       reset->setEnabled(head.isValid() && head.isLocalBranch());
     }
