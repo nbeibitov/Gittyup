@@ -354,6 +354,8 @@ if(GITTYUP_PACK_WIN64)
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/gittyup-indexer.exe
             ${PACKAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/gittyup-indexer.pdb
+            ${PACKAGE_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/gittyup-editor.exe
             ${PACKAGE_DIR})
 
   add_dependencies(deploy package)

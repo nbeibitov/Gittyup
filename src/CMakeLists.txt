@@ -21,6 +21,7 @@ add_subdirectory(plugins)
 add_subdirectory(tools)
 add_subdirectory(ui)
 add_subdirectory(editor)
+add_subdirectory(editorhelper)
 add_subdirectory(update)
 add_subdirectory(watcher)
 

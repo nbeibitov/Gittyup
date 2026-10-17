@@ -37,6 +37,7 @@ class CommitList;
 class QDateTime;
 class DetailView;
 class EditorWindow;
+class GitEditor;
 class History;
 class Index;
 class Location;
@@ -47,6 +48,7 @@ class PathspecWidget;
 class RebaseBanner;
 class ReferenceWidget;
 class RemoteCallbacks;
+class RepositoryWatcher;
 class ToolBar;
 struct ContributorInfo;
 
@@ -251,6 +253,14 @@ public:
 
   // interactive rebase of the commits after base
   void openInteractiveRebase(const git::Commit &base);
+  // Use Git's interactive rebase for histories containing merge commits.
+  // Git asks for the todo list and messages in dialogs of Gittyup.
+  void interactiveRebaseOnto(const git::Reference &branch);
+  // Rebase the commits from commit up to HEAD: in the dialog of Gittyup or,
+  // when they contain merges, with git (--rebase-merges) like above.
+  void interactiveRebaseFrom(const git::Commit &commit);
+  // True while a git process started by this view changes the repository.
+  bool isRunningGit() const { return mGitProcess; }
   void interactiveRebase(const git::Commit &base,
                          const QList<git::InteractiveRebase::Step> &steps,
                          const git::InteractiveRebase::Options &options);
@@ -415,6 +425,8 @@ private slots:
   void interactiveRebaseResult(const git::InteractiveRebase::Result &result);
   // Run 'git rebase <option>' for rebases that Gittyup cannot handle itself.
   void runGitRebase(const QString &option);
+  void startGitRebase(const QStringList &args, LogEntry *entry,
+                      const QString &title);
 
 signals:
   void statusChanged(bool dirty);
@@ -514,6 +526,12 @@ private:
 
   // A hook runs while the interface keeps responding.
   bool mRunningHook = false;
+
+  // Git started by this view, the editor it uses and the watcher that is
+  // suspended meanwhile.
+  QProcess *mGitProcess = nullptr;
+  GitEditor *mGitEditor = nullptr;
+  RepositoryWatcher *mRepoWatcher = nullptr;
 
   QList<QWidget *> mTrackedWindows;
 

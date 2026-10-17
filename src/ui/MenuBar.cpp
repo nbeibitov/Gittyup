@@ -51,6 +51,7 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QInputDialog>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QTextEdit>
@@ -759,12 +760,63 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
   interactiveRebaseHotkey.use(mInteractiveRebase);
   mInteractiveRebase->setToolTip(
       tr("Rebase the commits that are not on the upstream branch (or the "
-         "last commit); older commits can be added in the dialog"));
+         "last commit); choose a branch when the history contains merges"));
   connect(mInteractiveRebase, &QAction::triggered, [this] {
     RepoView *view = this->view();
-    git::Commit base = interactiveRebaseBase(view->repo());
-    if (base.isValid())
+    const git::Repository &repo = view->repo();
+    git::Commit base = interactiveRebaseBase(repo);
+    if (base.isValid() && !git::InteractiveRebase::containsMerge(repo, base)) {
       view->openInteractiveRebase(base);
+      return;
+    }
+
+    // Only the root commit (no parent and no upstream).
+    if (!base.isValid() && !repo.head().target().isMerge()) {
+      QMessageBox::information(view, tr("Interactive Rebase"),
+                               tr("There are no commits to rebase."));
+      return;
+    }
+
+    // Git recreates the merges (--rebase-merges); the dialog of Gittyup
+    // can't. Git needs the branch to rebase onto, the upstream by default.
+    git::Branch head = repo.head();
+    git::Branch upstream =
+        repo.isHeadDetached() ? git::Branch() : head.upstream();
+    QStringList names;
+    QList<git::Branch> branches;
+    int current = 0;
+    for (git_branch_t type : {GIT_BRANCH_LOCAL, GIT_BRANCH_REMOTE}) {
+      for (const git::Branch &branch : repo.branches(type)) {
+        if (branch.qualifiedName() == head.qualifiedName() ||
+            branch.name().endsWith("/HEAD"))
+          continue;
+        if (upstream.isValid() &&
+            branch.qualifiedName() == upstream.qualifiedName())
+          current = names.size();
+        names.append(QString("%1 (%2)").arg(
+            branch.name(),
+            type == GIT_BRANCH_LOCAL ? tr("local") : tr("remote")));
+        branches.append(branch);
+      }
+    }
+
+    if (branches.isEmpty()) {
+      QMessageBox::information(
+          view, tr("Interactive Rebase"),
+          tr("The commits contain merges. Git can rebase them onto another "
+             "branch, but there is none."));
+      return;
+    }
+
+    bool accepted = false;
+    QString selected = QInputDialog::getItem(
+        view, tr("Interactive Rebase onto Branch"),
+        tr("The commits contain merges, which git keeps while rebasing.\n"
+           "Choose the branch to rebase onto:"),
+        names, current, false, &accepted);
+    int index = names.indexOf(selected);
+    if (accepted && index >= 0)
+      view->interactiveRebaseOnto(branches.at(index));
   });
 
   mSquash = branch->addAction(tr("Squash..."));
@@ -1233,8 +1285,10 @@ void MenuBar::updateBranch() {
   mRebase->setEnabled(head.isValid());
   mSquash->setEnabled(head.isValid());
 
-  mInteractiveRebase->setEnabled(head.isValid() && !view->repo().isBare() &&
-                                 interactiveRebaseBase(view->repo()).isValid());
+  mInteractiveRebase->setEnabled(
+      head.isValid() && !view->repo().isBare() &&
+      view->repo().state() == GIT_REPOSITORY_STATE_NONE &&
+      head.target().isValid() && !view->isRunningGit());
 
   bool merging = false;
   QString text = tr("Merge");

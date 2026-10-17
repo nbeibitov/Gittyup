@@ -23,6 +23,7 @@ add_library(
   FileContextMenu.cpp
   FindWidget.cpp
   Footer.cpp
+  GitEditor.cpp
   History.cpp
   IgnoreDialog.cpp
   HotkeyManager.cpp

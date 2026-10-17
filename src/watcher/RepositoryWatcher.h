@@ -23,6 +23,9 @@ public:
   void setDebounceInterval(int msec);
   void cancelPendingNotification();
 
+  // Ignore changes while another process (git) changes the repository.
+  void setSuspended(bool suspended);
+
 protected:
   RepositoryWatcher(const git::Repository &repo, QObject *parent);
 
@@ -30,6 +33,7 @@ protected:
 
 private:
   QTimer mTimer;
+  bool mSuspended = false;
 };
 
 #endif

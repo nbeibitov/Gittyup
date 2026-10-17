@@ -165,7 +165,7 @@ else()
   endif()
 endif()
 
-add_dependencies(gittyup gittyup-indexer gittyup-relauncher)
+add_dependencies(gittyup gittyup-editor gittyup-indexer gittyup-relauncher)
 
 install(
   TARGETS gittyup
@@ -208,6 +208,23 @@ execute_process(COMMAND
 execute_process(COMMAND
 	${CMAKE_INSTALL_NAME_TOOL} -add_rpath \"@loader_path/../Frameworks\"
 	  \"\${CMAKE_INSTALL_PREFIX}/${INDEXER}\"
+  )"
+    COMPONENT ${GITTYUP_NAME})
+
+  # Fixup editor RPATH.
+  set(EDITOR_HELPER ${CONTENTS_DIR}/MacOS/gittyup-editor)
+  install(
+    CODE "execute_process(COMMAND
+		${CMAKE_INSTALL_NAME_TOOL} -delete_rpath \"${RPATH}\"
+	  \"\${CMAKE_INSTALL_PREFIX}/${EDITOR_HELPER}\"
+  )
+execute_process(COMMAND
+	${CMAKE_INSTALL_NAME_TOOL} -add_rpath \"/usr/local/qt\"
+	  \"\${CMAKE_INSTALL_PREFIX}/${EDITOR_HELPER}\"
+  )
+execute_process(COMMAND
+	${CMAKE_INSTALL_NAME_TOOL} -add_rpath \"@loader_path/../Frameworks\"
+	  \"\${CMAKE_INSTALL_PREFIX}/${EDITOR_HELPER}\"
   )"
     COMPONENT ${GITTYUP_NAME})
 else()

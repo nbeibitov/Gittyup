@@ -2257,21 +2257,6 @@ void CommitList::contextMenuEvent(QContextMenuEvent *event) {
         dialog->open();
       });
 
-      menu.addAction(tr("Rebase..."), [view, commit] {
-        MergeDialog *dialog =
-            new MergeDialog(RepoView::Rebase, view->repo(), view);
-        connect(dialog, &QDialog::accepted, [view, dialog] {
-          git::AnnotatedCommit upstream;
-          git::Reference ref = dialog->reference();
-          if (!ref.isValid())
-            upstream = dialog->target().annotatedCommit();
-          view->merge(dialog->flags(), ref, upstream);
-        });
-
-        dialog->setCommit(commit);
-        dialog->open();
-      });
-
       menu.addAction(tr("Squash..."), [view, commit] {
         MergeDialog *dialog =
             new MergeDialog(RepoView::Squash, view->repo(), view);
@@ -2287,16 +2272,15 @@ void CommitList::contextMenuEvent(QContextMenuEvent *event) {
         dialog->open();
       });
 
-      // Rebase the commits from this one up to HEAD.
+      // Rebase the commits from this one up to HEAD, merges included.
       QAction *interactive =
-          menu.addAction(tr("Interactive Rebase from Here..."), [view, commit] {
-            view->openInteractiveRebase(commit.parents().first());
-          });
+          menu.addAction(tr("Interactive Rebase from Here..."),
+                         [view, commit] { view->interactiveRebaseFrom(commit); });
       git::Commit headCommit = view->repo().head().target();
       interactive->setEnabled(
-          !view->repo().isBare() &&
+          !view->repo().isBare() && !view->isRunningGit() &&
           view->repo().state() == GIT_REPOSITORY_STATE_NONE &&
-          commit.parents().size() == 1 && headCommit.isValid() &&
+          !commit.parents().isEmpty() && headCommit.isValid() &&
           view->repo().mergeBase(commit, headCommit).id() == commit.id());
 
       menu.addSeparator();

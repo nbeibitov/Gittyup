@@ -23,6 +23,7 @@
 #include "RemoteCallbacks.h"
 #include "SearchField.h"
 #include "DoubleTreeWidget.h"
+#include "GitEditor.h"
 #include "ToolBar.h"
 #include "Debug.h"
 #include "app/Application.h"
@@ -32,8 +33,10 @@
 #include "dialogs/CommitDialog.h"
 #include "dialogs/DeleteBranchDialog.h"
 #include "dialogs/DeleteTagDialog.h"
+#include "dialogs/GitMessageDialog.h"
 #include "dialogs/InteractiveRebaseDialog.h"
 #include "dialogs/NewBranchDialog.h"
+#include "dialogs/RebaseTodoDialog.h"
 #include "dialogs/RemoteDialog.h"
 #include "dialogs/RenameBranchDialog.h"
 #include "dialogs/SettingsDialog.h"
@@ -93,6 +96,24 @@ const qint64 kSlowStatus = 3000;
 // but not more often than every kIndexRefreshInterval.
 const qint64 kRefreshIndexStatus = 10000;
 const qint64 kIndexRefreshInterval = 10 * 60 * 1000;
+
+// The character that starts the comments of a message that git asks for.
+QChar commentChar(const git::Repository &repo, const QString &text) {
+  git::Config config = repo.gitConfig();
+  QString value = config.value<QString>("core.commentChar");
+  if (value.isEmpty())
+    value = config.value<QString>("core.commentString");
+  if (value != "auto")
+    return value.isEmpty() ? QChar('#') : value.at(0);
+
+  // Git picks a character that no line of the message starts with; its
+  // instructions end the text.
+  QStringList lines = text.trimmed().split('\n');
+  QChar last = lines.isEmpty() || lines.last().isEmpty()
+                   ? QChar('#')
+                   : lines.last().at(0);
+  return QString("#;@!$%^&|:").contains(last) ? last : QChar('#');
+}
 
 // Hook output for the log, without the colors of terminals.
 QString hookOutput(const QString &output) {
@@ -431,6 +452,7 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
 
   // Refresh when the workdir changes.
   RepositoryWatcher *watcher = RepositoryWatcher::create(repo, this);
+  mRepoWatcher = watcher;
   connect(notifier, &git::RepositoryNotifier::referenceUpdated, watcher,
           &RepositoryWatcher::cancelPendingNotification);
 
@@ -633,7 +655,8 @@ QString RepoView::indexStamp() const {
 }
 
 void RepoView::checkExternalChanges() {
-  if (!mRepo.isValid())
+  // Refreshed when git finishes.
+  if (!mRepo.isValid() || isRunningGit())
     return;
 
   // Commits, checkouts, fetches, branches, ...
@@ -669,6 +692,15 @@ RepoView::~RepoView() {
   // Don't keep the application running for a refresh of the index.
   if (mIndexRefreshCanceled)
     *mIndexRefreshCanceled = true;
+
+  // Git waiting for a dialog fails when the editor closes and leaves the
+  // repository consistent; don't kill it.
+  if (mGitProcess) {
+    disconnect(mGitProcess, nullptr, this, nullptr);
+    delete mGitEditor;
+    mGitEditor = nullptr;
+    mGitProcess->waitForFinished(10000);
+  }
 
   // A view can be destroyed without being closed first (closeEvent cancels
   // background tasks). A remote transfer still running uses mCallbacks,
@@ -1711,7 +1743,8 @@ void RepoView::continueRebase() {
 }
 
 void RepoView::refreshIndex() {
-  if (mIndexRefresh.isRunning() || mRepo.isBare())
+  // Writing the index would race with git.
+  if (mIndexRefresh.isRunning() || mRepo.isBare() || isRunningGit())
     return;
   if (mIndexRefreshTime.isValid() &&
       mIndexRefreshTime.elapsed() < kIndexRefreshInterval)
@@ -1740,7 +1773,7 @@ void RepoView::refreshIndex() {
 }
 
 void RepoView::updateCommitGraph() {
-  if (mCommitGraph.isRunning() ||
+  if (mCommitGraph.isRunning() || isRunningGit() ||
       !mRepo.gitConfig().value<bool>("core.commitGraph", true))
     return;
 
@@ -1798,18 +1831,85 @@ void RepoView::quitRebase() {
 void RepoView::runGitRebase(const QString &option) {
   LogEntry *entry =
       addLogEntry(QString("git rebase %1").arg(option), tr("Rebase"));
+  startGitRebase({"rebase", option}, entry, tr("Rebase"));
+}
+
+void RepoView::startGitRebase(const QStringList &args, LogEntry *entry,
+                              const QString &title) {
+  if (mGitProcess) {
+    entry->addEntry(LogEntry::Error, tr("Git is still running."));
+    return;
+  }
 
   QString git = git::Command::gitPath();
   if (git.isEmpty()) {
     entry->addEntry(LogEntry::Error,
                     tr("Git was not found on the PATH. It is needed for "
-                       "rebases started outside of Gittyup."));
+                       "rebases that Gittyup cannot do itself."));
     return;
   }
 
-  // Accept the default commit messages instead of opening an editor.
+  // Git asks for the todo list and commit messages in dialogs.
+  if (!mGitEditor) {
+    mGitEditor = new GitEditor(
+        [this](GitEditor::Kind kind, const QString &file,
+               GitEditor::Reply reply) {
+          QFile in(file);
+          if (!in.open(QFile::ReadOnly)) {
+            reply(false);
+            return;
+          }
+          QString text = QString::fromUtf8(in.readAll());
+          in.close();
+
+          auto save = [file, reply](const QString &text) {
+            QFile out(file);
+            bool ok = out.open(QFile::WriteOnly | QFile::Truncate) &&
+                      out.write(text.toUtf8()) >= 0;
+            out.close();
+            reply(ok);
+          };
+
+          QDialog *dialog;
+          if (kind == GitEditor::Kind::Sequence) {
+            RebaseTodoDialog *todo = new RebaseTodoDialog(text, this);
+            connect(todo, &QDialog::accepted, this,
+                    [todo, save] { save(todo->todo()); });
+            dialog = todo;
+          } else {
+            GitMessageDialog *message =
+                new GitMessageDialog(text, commentChar(mRepo, text), this);
+            connect(message, &QDialog::accepted, this,
+                    [message, save] { save(message->text()); });
+            dialog = message;
+          }
+
+          connect(dialog, &QDialog::rejected, this,
+                  [reply] { reply(false); });
+          dialog->open();
+          dialog->raise();
+          dialog->activateWindow();
+        },
+        this);
+
+    QString error = mGitEditor->listen();
+    if (!error.isEmpty()) {
+      entry->addEntry(LogEntry::Error, error);
+      delete mGitEditor;
+      mGitEditor = nullptr;
+      return;
+    }
+  }
+
+  // Don't race with git for the index.
+  if (mIndexRefresh.isRunning()) {
+    if (mIndexRefreshCanceled)
+      *mIndexRefreshCanceled = true;
+    mIndexRefresh.waitForFinished();
+  }
+
   QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-  env.insert("GIT_EDITOR", "true");
+  mGitEditor->setup(env);
   env.insert("GIT_TERMINAL_PROMPT", "0");
 
   QProcess *process = new QProcess(this);
@@ -1817,18 +1917,46 @@ void RepoView::runGitRebase(const QString &option) {
   process->setProcessEnvironment(env);
   process->setProcessChannelMode(QProcess::MergedChannels);
 
+  mGitProcess = process;
+  if (mRepoWatcher)
+    mRepoWatcher->setSuspended(true);
   mRebaseBanner->setBusy(true);
-  auto finish = [this, process, entry](bool ok) {
+  mGitEditor->takeCanceled();
+
+  auto finish = [this, process, entry, title](bool ok) {
     QString output = QString::fromUtf8(process->readAll()).trimmed();
-    if (!output.isEmpty())
-      entry->addEntry(ok ? LogEntry::Entry : LogEntry::Error,
-                      output.toHtmlEscaped().replace('\n', "<br>"));
-    if (ok)
-      entry->addEntry(tr("Done"), tr("Rebase"));
+    bool canceled = mGitEditor && mGitEditor->takeCanceled();
+    bool stopped = !ok && git::RebaseState::read(mRepo).isValid();
+
+    if (canceled) {
+      // Git only complains about the editor.
+      entry->addEntry(stopped ? tr("Canceled, the rebase is still in progress")
+                              : tr("Canceled"),
+                      title);
+    } else {
+      if (!output.isEmpty())
+        entry->addEntry(ok || stopped ? LogEntry::Entry : LogEntry::Error,
+                        output.toHtmlEscaped().replace('\n', "<br>"));
+      if (ok) {
+        entry->addEntry(tr("Done"), title);
+      } else if (stopped) {
+        entry->addEntry(LogEntry::Hint,
+                        tr("The rebase stopped. Resolve the conflicts or "
+                           "change the commit, then continue, skip or "
+                           "abort it in the banner."));
+      } else if (output.isEmpty()) {
+        entry->addEntry(LogEntry::Error, tr("Git rebase failed."));
+      }
+    }
 
     process->deleteLater();
+    mGitProcess = nullptr;
+    if (mRepoWatcher)
+      mRepoWatcher->setSuspended(false);
     mRebaseBanner->setBusy(false);
     mDetails->setCommitMessage(QString());
+    mIndexStamp = indexStamp();
+    mRefsSignature = mRepo.refsSignature();
     emit mRepo.notifier()->stateChanged();
     refresh(false);
   };
@@ -1845,7 +1973,7 @@ void RepoView::runGitRebase(const QString &option) {
             finish(false);
           });
 
-  process->start(git, {"rebase", option});
+  process->start(git, args);
 }
 
 void RepoView::rebase(const git::AnnotatedCommit &upstream, LogEntry *parent) {
@@ -1868,6 +1996,38 @@ void RepoView::openInteractiveRebase(const git::Commit &base) {
   });
 
   dialog->open();
+}
+
+void RepoView::interactiveRebaseOnto(const git::Reference &branch) {
+  if (!branch.isValid() || !branch.target().isValid() ||
+      mRepo.state() != GIT_REPOSITORY_STATE_NONE || mRepo.isBare())
+    return;
+
+  LogEntry *entry =
+      addLogEntry(tr("git rebase -i --rebase-merges %1")
+                      .arg(branch.name().toHtmlEscaped()),
+                  tr("Interactive Rebase"));
+  startGitRebase({"rebase", "-i", "--rebase-merges", branch.qualifiedName()},
+                 entry, tr("Interactive Rebase"));
+}
+
+void RepoView::interactiveRebaseFrom(const git::Commit &commit) {
+  if (!commit.isValid() || commit.parents().isEmpty() ||
+      mRepo.state() != GIT_REPOSITORY_STATE_NONE || mRepo.isBare())
+    return;
+
+  git::Commit base = commit.parents().first();
+  if (!git::InteractiveRebase::containsMerge(mRepo, base)) {
+    openInteractiveRebase(base);
+    return;
+  }
+
+  // The commits stay on base; git recreates the merges.
+  LogEntry *entry = addLogEntry(
+      tr("git rebase -i --rebase-merges %1").arg(base.shortId()),
+      tr("Interactive Rebase"));
+  startGitRebase({"rebase", "-i", "--rebase-merges", base.id().toString()},
+                 entry, tr("Interactive Rebase"));
 }
 
 void RepoView::interactiveRebase(

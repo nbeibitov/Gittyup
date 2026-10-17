@@ -15,6 +15,7 @@ add_library(
   DiffPanel.cpp
   ExternalToolsDialog.cpp
   ExternalToolsModel.cpp
+  GitMessageDialog.cpp
   HotkeysPanel.cpp
   IconLabel.cpp
   InteractiveRebaseDialog.cpp
@@ -22,6 +23,7 @@ add_library(
   NewBranchDialog.cpp
   PluginsPanel.cpp
   PullRequestDialog.cpp
+  RebaseTodoDialog.cpp
   RemoteDialog.cpp
   RemoteTableModel.cpp
   RenameBranchDialog.cpp

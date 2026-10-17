@@ -27,4 +27,13 @@ void RepositoryWatcher::setDebounceInterval(int msec) {
 
 void RepositoryWatcher::cancelPendingNotification() { mTimer.stop(); }
 
-void RepositoryWatcher::scheduleNotification() { mTimer.start(); }
+void RepositoryWatcher::setSuspended(bool suspended) {
+  mSuspended = suspended;
+  if (suspended)
+    mTimer.stop();
+}
+
+void RepositoryWatcher::scheduleNotification() {
+  if (!mSuspended)
+    mTimer.start();
+}

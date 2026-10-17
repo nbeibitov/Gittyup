@@ -168,6 +168,28 @@ QList<Commit> InteractiveRebase::commits(const Repository &repo,
   return result;
 }
 
+bool InteractiveRebase::containsMerge(const Repository &repo,
+                                      const Commit &base) {
+  git_revwalk *walker = nullptr;
+  if (git_revwalk_new(&walker, repo))
+    return false;
+
+  std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> guard(
+      walker, git_revwalk_free);
+  if (git_revwalk_push_head(walker) ||
+      (base.isValid() && git_revwalk_hide(walker, base.id())))
+    return false;
+
+  git_oid id;
+  while (!git_revwalk_next(&id, walker)) {
+    Commit commit = repo.lookupCommit(Id(id));
+    if (commit.isValid() && commit.isMerge())
+      return true;
+  }
+
+  return false;
+}
+
 QList<InteractiveRebase::Step>
 InteractiveRebase::defaultSteps(const QList<Commit> &commits) {
   QList<Step> steps;

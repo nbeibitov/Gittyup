@@ -80,6 +80,9 @@ public:
   static QList<Commit> commits(const Repository &repo, const Commit &base,
                                QString *error = nullptr);
 
+  // True if a commit after base (exclusive) up to HEAD is a merge.
+  static bool containsMerge(const Repository &repo, const Commit &base);
+
   // Default steps (all pick) for the given commits.
   static QList<Step> defaultSteps(const QList<Commit> &commits);
 
