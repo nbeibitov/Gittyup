@@ -22,14 +22,22 @@ namespace {
 
 // Name of a branch that points to the commit, preferring local branches.
 QString branchAt(const git::Repository &repo, const git::Id &id) {
+  QString fallback;
   for (git_branch_t type : {GIT_BRANCH_LOCAL, GIT_BRANCH_REMOTE}) {
     for (const git::Branch &branch : repo.branches(type)) {
-      if (!branch.name().endsWith("/HEAD") && branch.target().id() == id)
-        return branch.name();
+      if (!branch.name().endsWith("/HEAD") && branch.target().id() == id) {
+        QString name = branch.name();
+        if (name == "master" || name == "main" ||
+            name == "origin/master" || name == "origin/main")
+          return name;
+
+        if (fallback.isEmpty())
+          fallback = name;
+      }
     }
   }
 
-  return QString();
+  return fallback;
 }
 
 } // namespace
@@ -110,6 +118,8 @@ void RebaseBanner::updateState() {
     QString id = commit.isValid() ? commit.shortId()
                                   : state.onto().toString().left(7);
     git::Reference ref = mRepo.lookupRef(state.ontoName());
+    if (!ref.isValid())
+      ref = mRepo.lookupBranch(state.ontoName());
     QString name = (ref.isValid() && ref.target().id() == state.onto())
                        ? ref.name()
                        : branchAt(mRepo, state.onto());

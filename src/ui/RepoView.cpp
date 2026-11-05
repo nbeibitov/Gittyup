@@ -1994,6 +1994,8 @@ void RepoView::openInteractiveRebase(const git::Commit &base) {
   connect(dialog, &QDialog::accepted, this, [this, dialog] {
     interactiveRebase(dialog->base(), dialog->steps(), dialog->options());
   });
+  connect(dialog, &InteractiveRebaseDialog::rebaseMergesRequested, this,
+          &RepoView::interactiveRebaseOnto);
 
   dialog->open();
 }

@@ -104,7 +104,8 @@ InteractiveRebaseDialog::InteractiveRebaseDialog(const git::Repository &repo,
     }
   }
   mOnto->setToolTip(tr("Move the commits onto another branch, like "
-                       "'git rebase -i <branch>'"));
+                       "'git rebase -i <branch>'. If they contain merges, "
+                       "the rebase continues with git."));
   connect(mOnto, QOverload<int>::of(&QComboBox::activated), this,
           [this](int index) {
             setOnto(mOnto->itemData(index).value<git::Reference>());
@@ -306,8 +307,10 @@ git::InteractiveRebase::Options InteractiveRebaseDialog::options() const {
   result.autostash = mAutostash->isChecked();
   result.keepEmpty = mKeepEmpty->isChecked();
   result.committerDateIsAuthorDate = mCommitterDate->isChecked();
-  if (mOntoRef.isValid())
+  if (mOntoRef.isValid()) {
     result.onto = mOntoRef.target().id();
+    result.ontoName = mOntoRef.name();
+  }
   return result;
 }
 
@@ -375,17 +378,26 @@ void InteractiveRebaseDialog::setOnto(const git::Reference &ref) {
   if (!mError.isEmpty())
     return;
 
+  git::Commit tip = mRepo.head().target();
+  git::Commit target = ref.isValid() ? ref.target() : git::Commit();
+  git::Commit base = target.isValid() ? mRepo.mergeBase(tip, target)
+                                      : git::Commit();
+
+  // This dialog can't rewrite merges, and leaving them out of the range would
+  // silently drop the commits below them from the branch.
+  if (base.isValid() && git::InteractiveRebase::containsMerge(mRepo, base)) {
+    reject();
+    emit rebaseMergesRequested(ref);
+    return;
+  }
+
   mOntoRef = ref;
   int index = ref.isValid() ? mOnto->findText(ref.name()) : 0;
   if (index >= 0)
     mOnto->setCurrentIndex(index);
 
   // Include all commits that are not on the new upstream, like
-  // 'git rebase -i <branch>' does. Merge and root commits stop the range.
-  git::Commit tip = mRepo.head().target();
-  git::Commit target = ref.isValid() ? ref.target() : git::Commit();
-  git::Commit base = target.isValid() ? mRepo.mergeBase(tip, target)
-                                      : git::Commit();
+  // 'git rebase -i <branch>' does.
   if (base.isValid() && mRepo.mergeBase(base, mBase).id() == base.id()) {
     while (mBase.id() != base.id() && prependBase())
       ;

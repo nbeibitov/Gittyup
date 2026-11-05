@@ -48,6 +48,7 @@ public:
     // Commit to apply the steps onto. Invalid means the base commit, i.e.
     // the commits are rewritten in place.
     Id onto;
+    QString ontoName;
   };
 
   enum class Status { Finished, Conflict, Edit, Error };

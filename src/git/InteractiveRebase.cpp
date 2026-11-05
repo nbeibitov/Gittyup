@@ -117,6 +117,7 @@ struct InteractiveRebase::State {
   QString headName;      // branch reference name or kDetachedHead
   Id origHead;
   Id onto;
+  QString ontoName;
   Id autostash; // stash commit created by autostash
 };
 
@@ -359,6 +360,7 @@ InteractiveRebase::Result InteractiveRebase::start(const Commit &base,
   state.steps = steps;
   state.options = options;
   state.onto = options.onto.isValid() ? options.onto : base.id();
+  state.ontoName = options.ontoName;
   state.origHead = Id(git_reference_target(head.get()));
   state.headName = git_reference_is_branch(head.get())
                        ? QString::fromUtf8(git_reference_name(head.get()))
@@ -947,6 +949,7 @@ bool InteractiveRebase::save(const State &state) const {
   plan["headName"] = state.headName;
   plan["origHead"] = state.origHead.toString();
   plan["onto"] = state.onto.toString();
+  plan["ontoName"] = state.ontoName;
   plan["autostash"] =
       state.autostash.isValid() ? state.autostash.toString() : QString();
   plan["next"] = state.next;
@@ -960,6 +963,8 @@ bool InteractiveRebase::save(const State &state) const {
          writeFile(statePath("orig-head"),
                    state.origHead.toString().toUtf8() + "\n") &&
          writeFile(statePath("onto"), state.onto.toString().toUtf8() + "\n") &&
+         (state.ontoName.isEmpty() ||
+          writeFile(statePath("onto_name"), state.ontoName.toUtf8() + "\n")) &&
          writeFile(statePath("interactive"), QByteArray()) &&
          writeFile(statePath("end"),
                    QByteArray::number(state.steps.size()) + "\n") &&
@@ -987,6 +992,7 @@ bool InteractiveRebase::load(State &state) const {
   state.headName = plan.value("headName").toString();
   state.origHead = toId(plan.value("origHead"));
   state.onto = toId(plan.value("onto"));
+  state.ontoName = plan.value("ontoName").toString();
   state.autostash = toId(plan.value("autostash"));
   state.next = plan.value("next").toInt();
   state.conflict = plan.value("conflict").toBool();

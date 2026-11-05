@@ -52,7 +52,13 @@ public:
 
   // Rebase onto the target of ref instead of rewriting the commits in place
   // (invalid ref). The range is extended back to the merge base with ref.
+  // If that range contains merges the dialog closes and asks for git to do
+  // the rebase with rebaseMergesRequested().
   void setOnto(const git::Reference &ref);
+
+signals:
+  // The commits to rebase onto ref contain merges, which only git can recreate.
+  void rebaseMergesRequested(const git::Reference &ref);
 
 private:
   QTreeWidgetItem *createItem(const git::Commit &commit) const;

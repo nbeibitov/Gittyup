@@ -26,6 +26,7 @@
 #include <QFile>
 #include <QPlainTextEdit>
 #include <QProcess>
+#include <QSignalSpy>
 #include <QStandardItemModel>
 #include <QTabWidget>
 #include <QTreeWidget>
@@ -51,6 +52,8 @@ private slots:
   void cancelKeepsBranch();
   void conflictStopsAndAborts();
   void rebaseFromCommit();
+  void dialogOntoWithoutMerges();
+  void dialogOntoContinuesWithGit();
 
 private:
   bool git(const QStringList &args, QString *output = nullptr);
@@ -438,6 +441,63 @@ void TestRebaseMerges::rebaseWithDialogs() {
 
   Commit o = merge.parents().first().parents().first();
   QCOMPARE(o.id().toString(), mOther);
+}
+
+void TestRebaseMerges::dialogOntoWithoutMerges() {
+  if (Command::gitPath().isEmpty())
+    QSKIP("git is not installed");
+
+  createMergeHistory();
+  Commit merge = mRepo.head().target().parents().first();
+  QVERIFY(git({"branch", "at-merge", "HEAD~1"}));
+
+  // Only B is not on the branch, so the dialog keeps working.
+  InteractiveRebaseDialog *dialog = new InteractiveRebaseDialog(mRepo, merge);
+  QSignalSpy spy(dialog, &InteractiveRebaseDialog::rebaseMergesRequested);
+  dialog->show();
+  dialog->setOnto(mRepo.lookupRef("refs/heads/at-merge"));
+
+  QCOMPARE(spy.count(), 0);
+  QVERIFY(dialog->isVisible());
+  QCOMPARE(dialog->steps().size(), 1);
+  QCOMPARE(dialog->options().onto, merge.id());
+  delete dialog;
+}
+
+void TestRebaseMerges::dialogOntoContinuesWithGit() {
+  if (Command::gitPath().isEmpty())
+    QSKIP("git is not installed");
+  if (GitEditor::helperPath().isEmpty())
+    QSKIP("gittyup-editor is not built");
+
+  createMergeHistory();
+  Id before = mRepo.head().target().id();
+  RepoView *view = openView();
+  QVERIFY(view);
+
+  // A pushed branch: the dialog opens for the last commit, whose parent is a
+  // merge, but the commits that are not on 'other' go further back.
+  view->openInteractiveRebase(mRepo.head().target().parents().first());
+  InteractiveRebaseDialog *dialog = nullptr;
+  QTRY_VERIFY_WITH_TIMEOUT((dialog = visibleDialog<InteractiveRebaseDialog>()),
+                           30000);
+  QCOMPARE(dialog->steps().size(), 1);
+  dialog->setOnto(mRepo.lookupRef("refs/heads/other"));
+  QVERIFY(!dialog->isVisible());
+  QVERIFY(view->isRunningGit());
+
+  // Git lists all of them instead of only the last commit.
+  RebaseTodoDialog *todo = nullptr;
+  QTRY_VERIFY_WITH_TIMEOUT((todo = visibleDialog<RebaseTodoDialog>()), 30000);
+  QVERIFY(rowOf(todo, "A") >= 0);
+  QVERIFY(rowOf(todo, "S") >= 0);
+  QVERIFY(rowOf(todo, "side # Merge side") >= 0);
+  QVERIFY(rowOf(todo, "B") >= 0);
+  todo->reject();
+
+  QTRY_VERIFY_WITH_TIMEOUT(!view->isRunningGit(), 60000);
+  QVERIFY(!RebaseState::read(mRepo).isValid());
+  QCOMPARE(mRepo.head().target().id(), before);
 }
 
 void TestRebaseMerges::cancelKeepsBranch() {
