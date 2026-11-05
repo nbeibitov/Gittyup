@@ -10,6 +10,7 @@ add_library(
   CommitEditor.cpp
   ContextMenuButton.cpp
   DetailView.cpp
+  ConflictDialog.cpp
   DiffView/DiffView.cpp
   DiffView/HunkWidget.cpp
   DiffView/FileWidget.cpp

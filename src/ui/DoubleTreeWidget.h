@@ -22,6 +22,8 @@ class BlameEditor;
 class StatePushButton;
 class DiffView;
 class QLabel;
+class QPushButton;
+class QToolButton;
 
 // button in treeview:
 // https://stackoverflow.com/questions/40716138/how-to-add-a-button-to-a-qtreeview-row
@@ -71,6 +73,14 @@ private:
   void loadEditorContent(const QModelIndexList &indexes);
   void toggleCollapseStagedFiles();
   void toggleCollapseUnstagedFiles();
+
+  // Collect the conflicts of the diff and update the conflict bar.
+  void updateConflicts();
+  void updateConflictBar();
+  // Show the conflict at position, which wraps around at both ends.
+  void showConflict(int position);
+  void selectFile(const QString &name);
+  void openConflictDialog();
   QAction *setupAppearanceAction(const char *name, Setting::Id id,
                                  bool defaultValue = false);
 
@@ -80,6 +90,20 @@ private:
   StatePushButton *collapseButtonStagedFiles{nullptr};
   StatePushButton *collapseButtonUnstagedFiles{nullptr};
   QLabel *mUnstagedCommitedFiles{nullptr};
+
+  // A block of a conflicted file, or the whole file (negative hunk) when it
+  // has no blocks, e.g. modified on one side and deleted on the other.
+  struct Conflict {
+    QString file;
+    int hunk;
+  };
+
+  QList<Conflict> mConflicts;
+  int mConflictPosition{-1}; // -1: not navigated yet
+  QWidget *mConflictBar{nullptr};
+  QLabel *mConflictStatus{nullptr};
+  QPushButton *mDiffButton{nullptr};
+  QToolButton *mConflictWindow{nullptr};
 
   struct SelectedFile {
     QString filename;

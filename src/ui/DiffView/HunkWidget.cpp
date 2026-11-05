@@ -73,31 +73,36 @@ _HunkWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
       mUndo->setVisible(false);
       mOurs->setEnabled(true);
       mTheirs->setEnabled(true);
+      mBoth->setEnabled(true);
     });
+
+    auto chosen = [this] {
+      mSave->setVisible(true);
+      mUndo->setVisible(true);
+      mOurs->setEnabled(false);
+      mTheirs->setEnabled(false);
+      mBoth->setEnabled(false);
+    };
 
     mOurs = new QToolButton(this);
     mOurs->setObjectName("ConflictOurs");
     mOurs->setStyleSheet(
         Application::theme()->diffButtonStyle(Theme::Diff::Ours));
     mOurs->setText(HunkWidget::tr("Use Ours"));
-    connect(mOurs, &QToolButton::clicked, [this] {
-      mSave->setVisible(true);
-      mUndo->setVisible(true);
-      mOurs->setEnabled(false);
-      mTheirs->setEnabled(false);
-    });
+    connect(mOurs, &QToolButton::clicked, chosen);
 
     mTheirs = new QToolButton(this);
     mTheirs->setObjectName("ConflictTheirs");
     mTheirs->setStyleSheet(
         Application::theme()->diffButtonStyle(Theme::Diff::Theirs));
     mTheirs->setText(HunkWidget::tr("Use Theirs"));
-    connect(mTheirs, &QToolButton::clicked, [this] {
-      mSave->setVisible(true);
-      mUndo->setVisible(true);
-      mOurs->setEnabled(false);
-      mTheirs->setEnabled(false);
-    });
+    connect(mTheirs, &QToolButton::clicked, chosen);
+
+    mBoth = new QToolButton(this);
+    mBoth->setObjectName("ConflictBoth");
+    mBoth->setText(HunkWidget::tr("Use Both"));
+    mBoth->setToolTip(HunkWidget::tr("Keep our lines followed by their lines"));
+    connect(mBoth, &QToolButton::clicked, chosen);
   }
 
   EditButton *edit = new EditButton(patch, index, false, lfs, this);
@@ -125,13 +130,14 @@ _HunkWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
   QHBoxLayout *buttons = new QHBoxLayout;
   buttons->setContentsMargins(0, 0, 0, 0);
   buttons->setSpacing(4);
-  if (mSave && mUndo && mOurs && mTheirs) {
+  if (mSave && mUndo && mOurs && mTheirs && mBoth) {
     mSave->setVisible(false);
     mUndo->setVisible(false);
     buttons->addWidget(mSave);
     buttons->addWidget(mUndo);
     buttons->addWidget(mOurs);
     buttons->addWidget(mTheirs);
+    buttons->addWidget(mBoth);
     buttons->addSpacing(8);
   }
 
@@ -180,6 +186,8 @@ QToolButton *_HunkWidget::Header::undoButton() const { return mUndo; }
 QToolButton *_HunkWidget::Header::oursButton() const { return mOurs; }
 
 QToolButton *_HunkWidget::Header::theirsButton() const { return mTheirs; }
+
+QToolButton *_HunkWidget::Header::bothButton() const { return mBoth; }
 
 void _HunkWidget::Header::mouseDoubleClickEvent(QMouseEvent *event) {
   if (mButton->isEnabled())
@@ -266,7 +274,9 @@ HunkWidget::HunkWidget(DiffView *view, const git::Diff &diff,
         auto resolution = mPatch.conflictResolution(mIndex);
         if (origin == GIT_DIFF_LINE_CONTEXT ||
             (origin == 'O' && resolution == git::Patch::Ours) ||
-            (origin == 'T' && resolution == git::Patch::Theirs))
+            (origin == 'T' && resolution == git::Patch::Theirs) ||
+            ((origin == 'O' || origin == 'T') &&
+             resolution == git::Patch::Both))
           continue;
 
         int line = mPatch.lineNumber(mIndex, i);
@@ -302,7 +312,7 @@ HunkWidget::HunkWidget(DiffView *view, const git::Diff &diff,
   if (QToolButton *ours = mHeader->oursButton()) {
     connect(ours, &QToolButton::clicked, [this] {
       mEditor->markerDeleteAll(TextEditor::Theirs);
-      chooseLines(TextEditor::Ours);
+      chooseLines(1 << TextEditor::Ours);
       mPatch.setConflictResolution(mIndex, git::Patch::Ours);
     });
   }
@@ -310,8 +320,15 @@ HunkWidget::HunkWidget(DiffView *view, const git::Diff &diff,
   if (QToolButton *theirs = mHeader->theirsButton()) {
     connect(theirs, &QToolButton::clicked, [this] {
       mEditor->markerDeleteAll(TextEditor::Ours);
-      chooseLines(TextEditor::Theirs);
+      chooseLines(1 << TextEditor::Theirs);
       mPatch.setConflictResolution(mIndex, git::Patch::Theirs);
+    });
+  }
+
+  if (QToolButton *both = mHeader->bothButton()) {
+    connect(both, &QToolButton::clicked, [this] {
+      chooseLines((1 << TextEditor::Ours) | (1 << TextEditor::Theirs));
+      mPatch.setConflictResolution(mIndex, git::Patch::Both);
     });
   }
 
@@ -801,6 +818,10 @@ void HunkWidget::load(git::Patch &staged, bool force) {
         mHeader->theirsButton()->click();
         break;
 
+      case git::Patch::Both:
+        mHeader->bothButton()->click();
+        break;
+
       case git::Patch::Unresolved:
         break;
     }
@@ -1264,10 +1285,10 @@ git::Index::StagedState HunkWidget::stageState() {
   return mStagedStage;
 }
 
-void HunkWidget::chooseLines(TextEditor::Marker kind) {
+void HunkWidget::chooseLines(int kinds) {
   // Edit hunk.
   mEditor->setReadOnly(false);
-  int mask = ((1 << TextEditor::Context) | (1 << kind));
+  int mask = ((1 << TextEditor::Context) | kinds);
   for (int i = mEditor->lineCount() - 1; i >= 0; --i) {
     if (!(mask & mEditor->markerGet(i))) {
       int pos = mEditor->positionFromLine(i);

@@ -469,4 +469,11 @@ void Patch::clearConflictResolutions(const Repository &repo) {
   repo.appDir().remove(kConflictResolutionFile);
 }
 
+void Patch::clearConflictResolutions(const Repository &repo,
+                                     const QString &name) {
+  QMap<QString, QMap<int, int>> map = readConflictResolutions(repo);
+  if (map.remove(name))
+    writeConflictResolutions(repo, map);
+}
+
 } // namespace git

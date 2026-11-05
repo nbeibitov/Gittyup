@@ -1927,16 +1927,19 @@ void RepoView::startGitRebase(const QStringList &args, LogEntry *entry,
     QString output = QString::fromUtf8(process->readAll()).trimmed();
     bool canceled = mGitEditor && mGitEditor->takeCanceled();
     bool stopped = !ok && git::RebaseState::read(mRepo).isValid();
+    QString details = output.toHtmlEscaped().replace('\n', "<br>");
 
     if (canceled) {
-      // Git only complains about the editor.
       entry->addEntry(stopped ? tr("Canceled, the rebase is still in progress")
                               : tr("Canceled"),
                       title);
+      // Mostly git's complaint about the editor, but it can say more.
+      if (!output.isEmpty())
+        entry->addEntry(LogEntry::Entry, details);
     } else {
       if (!output.isEmpty())
         entry->addEntry(ok || stopped ? LogEntry::Entry : LogEntry::Error,
-                        output.toHtmlEscaped().replace('\n', "<br>"));
+                        details);
       if (ok) {
         entry->addEntry(tr("Done"), title);
       } else if (stopped) {
@@ -2005,12 +2008,14 @@ void RepoView::interactiveRebaseOnto(const git::Reference &branch) {
       mRepo.state() != GIT_REPOSITORY_STATE_NONE || mRepo.isBare())
     return;
 
-  LogEntry *entry =
-      addLogEntry(tr("git rebase -i --rebase-merges %1")
-                      .arg(branch.name().toHtmlEscaped()),
-                  tr("Interactive Rebase"));
-  startGitRebase({"rebase", "-i", "--rebase-merges", branch.qualifiedName()},
-                 entry, tr("Interactive Rebase"));
+  // Without rebase-cousins, commits that don't start right at the merge base
+  // stay on their old branch point, and the branch doesn't move to the target.
+  const QString option = "--rebase-merges=rebase-cousins";
+  LogEntry *entry = addLogEntry(
+      tr("git rebase -i %1 %2").arg(option, branch.name().toHtmlEscaped()),
+      tr("Interactive Rebase"));
+  startGitRebase({"rebase", "-i", option, branch.qualifiedName()}, entry,
+                 tr("Interactive Rebase"));
 }
 
 void RepoView::interactiveRebaseFrom(const git::Commit &commit) {

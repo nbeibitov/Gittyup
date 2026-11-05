@@ -8,6 +8,7 @@ add_library(
   Commit.cpp
   CommitGraph.cpp
   Config.cpp
+  ConflictMarkers.cpp
   Diff.cpp
   Filter.cpp
   FilterList.cpp

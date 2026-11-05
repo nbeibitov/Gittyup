@@ -36,6 +36,21 @@ QModelIndexList collectSelectedIndexes(QTreeView *view,
   return selection;
 }
 
+bool containsError(const LogEntry *entry) {
+  if (!entry)
+    return false;
+
+  for (const LogEntry *child : entry->entries()) {
+    if (child->kind() == LogEntry::Error || containsError(child))
+      return true;
+  }
+  return false;
+}
+
+LogEntry *entryAt(const QModelIndex &index) {
+  return index.data(LogModel::EntryRole).value<LogEntry *>();
+}
+
 } // namespace
 
 LogView::LogView(LogEntry *root, QWidget *parent) : QTreeView(parent) {
@@ -63,9 +78,26 @@ LogView::LogView(LogEntry *root, QWidget *parent) : QTreeView(parent) {
 
   connect(model, &QAbstractItemModel::rowsInserted,
           [this](const QModelIndex &parent, int first, int last) {
-            if (!parent.isValid() && mCollapse)
-              collapse(this->model()->index(last - 1, 0, parent));
-            scrollTo(this->model()->index(last, 0, parent));
+            // Errors stay visible: an entry with an error isn't collapsed
+            // by the next one, and a collapsed one opens for a new error.
+            QAbstractItemModel *model = this->model();
+            if (!parent.isValid() && mCollapse) {
+              QModelIndex previous = model->index(last - 1, 0, parent);
+              if (!containsError(entryAt(previous)))
+                collapse(previous);
+            }
+
+            for (int row = first; row <= last; ++row) {
+              LogEntry *entry = entryAt(model->index(row, 0, parent));
+              if (entry && entry->kind() == LogEntry::Error) {
+                for (QModelIndex index = parent; index.isValid();
+                     index = index.parent())
+                  expand(index);
+                break;
+              }
+            }
+
+            scrollTo(model->index(last, 0, parent));
           });
 }
 

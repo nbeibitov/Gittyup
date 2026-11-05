@@ -25,7 +25,8 @@ class Repository;
 
 class Patch {
 public:
-  enum ConflictResolution { Unresolved, Ours, Theirs };
+  // The values are stored in the conflicts file of the repository.
+  enum ConflictResolution { Unresolved, Ours, Theirs, Both };
 
   struct LineStats {
     int additions;
@@ -146,6 +147,8 @@ public:
                            const QString &newPath = QString());
 
   static void clearConflictResolutions(const Repository &repo);
+  static void clearConflictResolutions(const Repository &repo,
+                                       const QString &name);
 
 private:
   /*!

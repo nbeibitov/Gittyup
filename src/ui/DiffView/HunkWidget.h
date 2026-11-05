@@ -44,6 +44,7 @@ public:
   QToolButton *undoButton() const;
   QToolButton *oursButton() const;
   QToolButton *theirsButton() const;
+  QToolButton *bothButton() const;
 
 public slots:
   void setCheckState(git::Index::StagedState state);
@@ -62,6 +63,7 @@ private:
   QToolButton *mUndo = nullptr;
   QToolButton *mOurs = nullptr;
   QToolButton *mTheirs = nullptr;
+  QToolButton *mBoth = nullptr;
 };
 } // namespace _HunkWidget
 
@@ -179,7 +181,8 @@ private:
 
   QList<Token> tokens(int line) const;
   QByteArray tokenBuffer(const QList<Token> &tokens);
-  void chooseLines(TextEditor::Marker kind);
+  // Keep the context and the lines of the given marker kinds (a mask).
+  void chooseLines(int kinds);
 
   DiffView *mView;
   git::Patch mPatch;

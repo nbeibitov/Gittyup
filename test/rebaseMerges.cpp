@@ -18,6 +18,7 @@
 #include "git/InteractiveRebase.h"
 #include "git/RebaseState.h"
 #include "git/Reference.h"
+#include "log/LogEntry.h"
 #include "ui/GitEditor.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
@@ -54,6 +55,7 @@ private slots:
   void rebaseFromCommit();
   void dialogOntoWithoutMerges();
   void dialogOntoContinuesWithGit();
+  void ontoMovesPastOldBranchPoint();
 
 private:
   bool git(const QStringList &args, QString *output = nullptr);
@@ -500,6 +502,50 @@ void TestRebaseMerges::dialogOntoContinuesWithGit() {
   QCOMPARE(mRepo.head().target().id(), before);
 }
 
+void TestRebaseMerges::ontoMovesPastOldBranchPoint() {
+  if (Command::gitPath().isEmpty())
+    QSKIP("git is not installed");
+  if (GitEditor::helperPath().isEmpty())
+    QSKIP("gittyup-editor is not built");
+
+  // base - O - S - T on 'other', and base - A - merge(S) - B on the branch.
+  // A doesn't start at the merge base with 'other', which is S, so git keeps
+  // it on base unless it's told to move such commits too.
+  QVERIFY(git({"config", "user.name", "Test"}));
+  QVERIFY(git({"config", "user.email", "test@example.com"}));
+  QVERIFY(git({"config", "core.autocrlf", "false"}));
+  commitFile("f.txt", "base\n", "base");
+
+  QVERIFY(git({"checkout", "-q", "-b", "other"}));
+  commitFile("o.txt", "other\n", "O");
+  commitFile("s.txt", "s\n", "S");
+  QVERIFY(git({"branch", "side"}));
+  commitFile("t.txt", "t\n", "T");
+
+  QVERIFY(git({"checkout", "-q", "-"}));
+  commitFile("a.txt", "a\n", "A");
+  QVERIFY(git({"merge", "-q", "--no-ff", "-m", "Merge side", "side"}));
+  commitFile("b.txt", "b\n", "B");
+
+  RepoView *view = openView();
+  QVERIFY(view);
+
+  Reference other = mRepo.lookupRef("refs/heads/other");
+  QVERIFY(other.isValid());
+  view->interactiveRebaseOnto(other);
+
+  RebaseTodoDialog *todo = nullptr;
+  QTRY_VERIFY_WITH_TIMEOUT((todo = visibleDialog<RebaseTodoDialog>()), 30000);
+  todo->accept();
+
+  QTRY_VERIFY_WITH_TIMEOUT(!view->isRunningGit(), 60000);
+  QVERIFY(!RebaseState::read(mRepo).isValid());
+
+  // The branch is on top of 'other', which already has the merged commits.
+  QCOMPARE(firstParentSummaries(3), QStringList({"B", "A", "T"}));
+  QVERIFY(git({"merge-base", "--is-ancestor", "other", "HEAD"}));
+}
+
 void TestRebaseMerges::cancelKeepsBranch() {
   if (Command::gitPath().isEmpty())
     QSKIP("git is not installed");
@@ -519,6 +565,18 @@ void TestRebaseMerges::cancelKeepsBranch() {
   QTRY_VERIFY_WITH_TIMEOUT(!view->isRunningGit(), 60000);
   QVERIFY(!RebaseState::read(mRepo).isValid());
   QCOMPARE(mRepo.head().target().id(), before);
+
+  // The log says so and keeps what git printed.
+  LogEntry *root = view->addLogEntry("text", "title")->parentEntry();
+  LogEntry *rebase = nullptr;
+  for (LogEntry *entry : root->entries()) {
+    if (entry->text().startsWith("git rebase -i"))
+      rebase = entry;
+  }
+  QVERIFY(rebase);
+  QCOMPARE(rebase->entries().size(), 2);
+  QVERIFY(rebase->entries().first()->text().startsWith("Canceled"));
+  QVERIFY(!rebase->entries().last()->text().isEmpty());
 }
 
 void TestRebaseMerges::conflictStopsAndAborts() {

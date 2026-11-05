@@ -1,5 +1,6 @@
 #include "Test.h"
 #include "conf/Settings.h"
+#include "git/Command.h"
 #include "ui/DoubleTreeWidget.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
@@ -7,7 +8,10 @@
 #include "ui/DiffView/DiffView.h"
 #include "ui/DiffView/HunkWidget.h"
 
+#include <QLabel>
+#include <QProcess>
 #include <QScrollBar>
+#include <QToolButton>
 
 using namespace Test;
 using namespace QTest;
@@ -56,7 +60,125 @@ class TestDiffView : public QObject {
 private slots:
   void loadsUntilScrollbarVisible_data();
   void loadsUntilScrollbarVisible();
+  void conflicts();
 };
+
+void TestDiffView::conflicts() {
+  if (git::Command::gitPath().isEmpty())
+    QSKIP("git is not installed");
+
+  Settings::instance()->setValue(Setting::Id::ShowChangedFilesAsList, false);
+
+  ScratchRepository repo;
+  QDir workdir = repo->workdir();
+  auto run = [&](const QStringList &args) {
+    QProcess process;
+    process.setWorkingDirectory(workdir.path());
+    process.start(git::Command::gitPath(), args);
+    return process.waitForFinished(60000) &&
+           process.exitStatus() == QProcess::NormalExit;
+  };
+
+  // Two blocks in a.txt, far enough apart, and one in b.txt.
+  auto text = [](const QString &first, const QString &second) {
+    QString result = first + "\n";
+    for (int i = 0; i < 12; ++i)
+      result += QString("line %1\n").arg(i);
+    return result + second + "\n";
+  };
+  auto commit = [&](const QString &first, const QString &second) {
+    QMap<QString, QString> files = {{"a.txt", text(first, second)},
+                                    {"b.txt", first + "\n"}};
+    return writeFiles(workdir, files) && run({"add", "."}) &&
+           run({"commit", "-q", "-m", first});
+  };
+
+  QVERIFY(run({"config", "user.name", "Test"}));
+  QVERIFY(run({"config", "user.email", "test@example.com"}));
+  QVERIFY(run({"config", "core.autocrlf", "false"}));
+  QVERIFY(commit("base", "base"));
+  QVERIFY(run({"checkout", "-q", "-b", "other"}));
+  QVERIFY(commit("theirs", "theirs 2"));
+  QVERIFY(run({"checkout", "-q", "-"}));
+  QVERIFY(commit("ours", "ours 2"));
+  run({"merge", "-q", "other"}); // fails with the conflicts
+
+  MainWindow window(repo);
+  window.show();
+  QVERIFY(qWaitForWindowExposed(&window));
+  window.resize(1200, 900);
+
+  RepoView *repoView = window.currentView();
+  auto doubleTree = repoView->findChild<DoubleTreeWidget *>();
+  QVERIFY(doubleTree);
+
+  auto bar = doubleTree->findChild<QWidget *>("ConflictBar");
+  auto status = doubleTree->findChild<QLabel *>("ConflictStatus");
+  auto next = doubleTree->findChild<QToolButton *>("ConflictNext");
+  auto previous = doubleTree->findChild<QToolButton *>("ConflictPrevious");
+  QVERIFY(bar && status && next && previous);
+  QTRY_COMPARE_WITH_TIMEOUT(status->text(),
+                            QString("Unresolved conflicts: 3, files: 2"),
+                            30000);
+
+  auto diffView = repoView->findChild<DiffView *>();
+  auto shownHunks = [diffView] {
+    return diffView->widget()->findChildren<HunkWidget *>();
+  };
+  auto readFile = [&](const QString &name) {
+    QFile file(workdir.filePath(name));
+    return file.open(QFile::ReadOnly) ? QString::fromUtf8(file.readAll())
+                                      : QString();
+  };
+
+  // Next selects the file and goes through its blocks, then the next file.
+  next->click();
+  QCOMPARE(status->text(), QString("Conflict 1 of 3: a.txt"));
+  QTRY_COMPARE_WITH_TIMEOUT(shownHunks().size(), 2, 10000);
+
+  next->click();
+  QCOMPARE(status->text(), QString("Conflict 2 of 3: a.txt"));
+
+  next->click();
+  QCOMPARE(status->text(), QString("Conflict 3 of 3: b.txt"));
+  QTRY_COMPARE_WITH_TIMEOUT(shownHunks().size(), 1, 10000);
+
+  // It wraps around at both ends.
+  next->click();
+  QCOMPARE(status->text(), QString("Conflict 1 of 3: a.txt"));
+  QTRY_COMPARE_WITH_TIMEOUT(shownHunks().size(), 2, 10000);
+  previous->click();
+  QCOMPARE(status->text(), QString("Conflict 3 of 3: b.txt"));
+  QTRY_COMPARE_WITH_TIMEOUT(shownHunks().size(), 1, 10000);
+
+  // Use Both keeps both sides in order and moves on to the next conflict.
+  HunkWidget *hunk = shownHunks().first();
+  auto both = hunk->findChild<QToolButton *>("ConflictBoth");
+  QVERIFY(both);
+  both->click();
+  auto save = hunk->findChild<QToolButton *>("ConflictSave");
+  QVERIFY(save);
+  save->click();
+  QTRY_COMPARE_WITH_TIMEOUT(readFile("b.txt"), QString("ours\ntheirs\n"),
+                            10000);
+  QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("Conflict 2 of 2: a.txt"),
+                            30000);
+  QTRY_COMPARE_WITH_TIMEOUT(shownHunks().size(), 2, 10000);
+
+  // Solving the other blocks removes the bar.
+  hunk = shownHunks().first();
+  hunk->findChild<QToolButton *>("ConflictTheirs")->click();
+  hunk->findChild<QToolButton *>("ConflictSave")->click();
+  QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("Conflict 1 of 1: a.txt"),
+                            30000);
+  QTRY_COMPARE_WITH_TIMEOUT(shownHunks().size(), 1, 10000);
+
+  hunk = shownHunks().first();
+  hunk->findChild<QToolButton *>("ConflictOurs")->click();
+  hunk->findChild<QToolButton *>("ConflictSave")->click();
+  QTRY_VERIFY_WITH_TIMEOUT(!bar->isVisible(), 30000);
+  QCOMPARE(readFile("a.txt"), text("theirs", "ours 2"));
+}
 
 void TestDiffView::loadsUntilScrollbarVisible_data() {
   QTest::addColumn<bool>("manyFiles");

@@ -7,6 +7,7 @@
 // Author: Martin Marmsoler
 //
 
+#include "ConflictDialog.h"
 #include "ContextMenuButton.h"
 #include "DoubleTreeWidget.h"
 #include "BlameEditor.h"
@@ -16,18 +17,27 @@
 #include "TreeProxy.h"
 #include "TreeView.h"
 #include "Debug.h"
+#include "HotkeyManager.h"
 #include "conf/Settings.h"
 #include "DiffView/DiffView.h"
 #include "git/Index.h"
 #include "git/Config.h"
+#include "git/Patch.h"
 
+#include <algorithm>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QShortcut>
 #include <QStackedWidget>
 #include <QButtonGroup>
+#include <QCoreApplication>
+#include <QFileInfo>
+#include <QSet>
+#include <QTimer>
+#include <QToolButton>
 #include <qnamespace.h>
 #include <qtreeview.h>
 
@@ -67,6 +77,12 @@ private:
 
 } // namespace
 
+static Hotkey nextConflictHotkey = HotkeyManager::registerHotkey(
+    "F8", "diffView/nextConflict", "DiffView/Next Conflict");
+
+static Hotkey previousConflictHotkey = HotkeyManager::registerHotkey(
+    "Shift+F8", "diffView/previousConflict", "DiffView/Previous Conflict");
+
 QAction *DoubleTreeWidget::setupAppearanceAction(const char *name,
                                                  Setting::Id id,
                                                  bool defaultValue) {
@@ -90,6 +106,7 @@ DoubleTreeWidget::DoubleTreeWidget(const git::Repository &repo, QWidget *parent)
   QPushButton *blameView = new QPushButton(tr("Blame"), this);
   segmentedButton->addButton(blameView, tr("Show Blame Editor"), true);
   QPushButton *diffView = new QPushButton(tr("Diff"), this);
+  mDiffButton = diffView;
   segmentedButton->addButton(diffView, tr("Show Diff View"), true);
 
   // Context button.
@@ -126,7 +143,53 @@ DoubleTreeWidget::DoubleTreeWidget(const git::Repository &repo, QWidget *parent)
   mFileView->addWidget(mEditor);
   mFileView->addWidget(mDiffView);
 
+  // Counter and navigation for the conflicts of the working directory.
+  mConflictBar = new QWidget(this);
+  mConflictBar->setObjectName("ConflictBar");
+  mConflictBar->setVisible(false);
+  mConflictStatus = new QLabel(mConflictBar);
+  mConflictStatus->setObjectName("ConflictStatus");
+
+  QToolButton *previousConflict = new QToolButton(mConflictBar);
+  previousConflict->setObjectName("ConflictPrevious");
+  previousConflict->setText(tr("Previous"));
+  previousConflict->setToolTip(tr("Go to the previous conflict"));
+  connect(previousConflict, &QToolButton::clicked, this,
+          [this] { showConflict(mConflictPosition - 1); });
+
+  QToolButton *nextConflict = new QToolButton(mConflictBar);
+  nextConflict->setObjectName("ConflictNext");
+  nextConflict->setText(tr("Next"));
+  nextConflict->setToolTip(tr("Go to the next conflict"));
+  connect(nextConflict, &QToolButton::clicked, this,
+          [this] { showConflict(mConflictPosition + 1); });
+
+  mConflictWindow = new QToolButton(mConflictBar);
+  mConflictWindow->setObjectName("ConflictResolve");
+  mConflictWindow->setText(tr("Resolve in Window..."));
+  mConflictWindow->setToolTip(tr("Show ours, the result and theirs side by side"));
+  connect(mConflictWindow, &QToolButton::clicked, this,
+          &DoubleTreeWidget::openConflictDialog);
+
+  QHBoxLayout *conflictLayout = new QHBoxLayout(mConflictBar);
+  conflictLayout->setContentsMargins(0, 0, 0, 0);
+  conflictLayout->addWidget(mConflictStatus, 1);
+  conflictLayout->addWidget(previousConflict);
+  conflictLayout->addWidget(nextConflict);
+  conflictLayout->addWidget(mConflictWindow);
+
+  // Only active while the bar is visible.
+  QShortcut *shortcut = new QShortcut(mConflictBar);
+  nextConflictHotkey.use(shortcut);
+  connect(shortcut, &QShortcut::activated, nextConflict, &QToolButton::click);
+
+  shortcut = new QShortcut(mConflictBar);
+  previousConflictHotkey.use(shortcut);
+  connect(shortcut, &QShortcut::activated, previousConflict,
+          &QToolButton::click);
+
   fileViewLayout->addLayout(buttonLayout);
+  fileViewLayout->addWidget(mConflictBar);
   fileViewLayout->addWidget(mFileView);
   mFileView->setCurrentIndex(DoubleTreeWidget::Diff);
   mFileView->show();
@@ -491,8 +554,136 @@ void DoubleTreeWidget::setDiff(const git::Diff &diff, const QString &file,
   if (diff.isValid())
     loadSelection();
 
+  // A solved conflict moves on to the next one.
+  int conflicts = mConflicts.size();
+  updateConflicts();
+  if (mConflictPosition >= 0 && mConflicts.size() < conflicts)
+    QTimer::singleShot(0, this, [this] {
+      if (mConflictPosition >= 0)
+        showConflict(mConflictPosition);
+    });
+
   DebugRefresh("finished, time: " << QDateTime::currentDateTime()
                                   << "Counter: " << mSetDiffCounter);
+}
+
+void DoubleTreeWidget::updateConflicts() {
+  mConflicts.clear();
+  if (mDiff.isValid() && mDiff.isConflicted()) {
+    for (int i = 0; i < mDiff.count(); ++i) {
+      if (mDiff.status(i) != GIT_DELTA_CONFLICTED)
+        continue;
+
+      git::Patch patch = mDiff.patch(i);
+      if (!patch.isValid())
+        continue;
+
+      QString name = patch.name();
+      for (int hunk = 0; hunk < patch.count(); ++hunk)
+        mConflicts.append({name, hunk});
+
+      // Both sides without any markers left: solved, but not staged yet.
+      git::Index::Conflict conflict = mDiff.index().conflict(name);
+      bool bothSides = !conflict.ours.isNull() && !conflict.theirs.isNull();
+      if (!patch.count() && (!bothSides || patch.isBinary()))
+        mConflicts.append({name, -1});
+    }
+  }
+
+  if (mConflicts.isEmpty()) {
+    mConflictPosition = -1;
+  } else if (mConflictPosition >= mConflicts.size()) {
+    mConflictPosition = mConflicts.size() - 1;
+  }
+
+  updateConflictBar();
+}
+
+void DoubleTreeWidget::updateConflictBar() {
+  mConflictBar->setVisible(!mConflicts.isEmpty());
+  if (mConflicts.isEmpty())
+    return;
+
+  mConflictWindow->setEnabled(
+      std::any_of(mConflicts.cbegin(), mConflicts.cend(),
+                  [](const Conflict &item) { return item.hunk >= 0; }));
+
+  if (mConflictPosition < 0) {
+    QSet<QString> files;
+    for (const Conflict &conflict : mConflicts)
+      files.insert(conflict.file);
+    mConflictStatus->setText(tr("Unresolved conflicts: %1, files: %2")
+                                 .arg(mConflicts.size())
+                                 .arg(files.size()));
+    return;
+  }
+
+  QString name = mConflicts.at(mConflictPosition).file;
+  mConflictStatus->setText(tr("Conflict %1 of %2: %3")
+                               .arg(mConflictPosition + 1)
+                               .arg(mConflicts.size())
+                               .arg(QFileInfo(name).fileName()));
+}
+
+void DoubleTreeWidget::showConflict(int position) {
+  int count = mConflicts.size();
+  if (!count)
+    return;
+
+  // Going back from "not navigated yet" starts at the last conflict.
+  mConflictPosition = (qMax(position, -1) + count) % count;
+  updateConflictBar();
+
+  if (mFileView->currentIndex() != DoubleTreeWidget::Diff)
+    mDiffButton->click();
+
+  Conflict conflict = mConflicts.at(mConflictPosition);
+  if (mDiffView->scrollToConflict(conflict.file, conflict.hunk))
+    return;
+
+  // The view shows the selected files only, and loads them when it needs to.
+  selectFile(conflict.file);
+  QCoreApplication::processEvents();
+  mDiffView->scrollToConflict(conflict.file, conflict.hunk);
+}
+
+void DoubleTreeWidget::selectFile(const QString &name) {
+  QModelIndex index = mDiffTreeModel->index(name);
+  for (TreeView *tree : {unstagedFiles, stagedFiles}) {
+    TreeProxy *proxy = static_cast<TreeProxy *>(tree->model());
+    QModelIndex mapped = proxy->mapFromSource(index);
+    if (mapped.isValid()) {
+      tree->selectionModel()->setCurrentIndex(
+          mapped, QItemSelectionModel::ClearAndSelect);
+      tree->scrollTo(mapped);
+      return;
+    }
+  }
+}
+
+void DoubleTreeWidget::openConflictDialog() {
+  // Files without blocks, such as modified on one side and deleted on the
+  // other, have nothing to show in panes.
+  QStringList files;
+  for (const Conflict &conflict : mConflicts) {
+    if (conflict.hunk >= 0 && !files.contains(conflict.file))
+      files.append(conflict.file);
+  }
+
+  if (files.isEmpty())
+    return;
+
+  QString file;
+  if (mConflictPosition >= 0)
+    file = mConflicts.at(mConflictPosition).file;
+
+  RepoView *view = RepoView::parentView(this);
+  auto *dialog = new ConflictDialog(view->repo(), files, file, this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  nextConflictHotkey.use(dialog->nextShortcut());
+  previousConflictHotkey.use(dialog->previousShortcut());
+  connect(dialog, &ConflictDialog::saved, view, [view] { view->refresh(); });
+  dialog->open();
 }
 
 void DoubleTreeWidget::find() { mEditor->find(); }

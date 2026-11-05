@@ -9,6 +9,7 @@
 
 #include "Test.h"
 #include "log/LogEntry.h"
+#include "log/LogModel.h"
 #include "log/LogView.h"
 #include <QtTest/QtTest>
 #include <QSplitter>
@@ -25,6 +26,7 @@ private slots:
   void initTestCase();
   void copy();
   void copyAll();
+  void errorsStayVisible();
   void cleanupTestCase();
 
 private:
@@ -76,6 +78,43 @@ void TestLog::initTestCase() {
   mSplitter->setMinimumHeight(400);
   mSplitter->show();
   QVERIFY(qWaitForWindowActive(mSplitter));
+}
+
+void TestLog::errorsStayVisible() {
+  LogEntry *root = new LogEntry; // owned by the model of the view
+  LogView view(root);
+  LogModel *model = static_cast<LogModel *>(view.model());
+  auto expanded = [&](LogEntry *entry) {
+    return view.isExpanded(model->index(entry));
+  };
+
+  // The next entry collapses one without errors,
+  LogEntry *plain = root->addEntry("plain", "Plain");
+  plain->addEntry(LogEntry::Entry, "child");
+  view.setEntryExpanded(plain, true);
+  LogEntry *failed = root->addEntry("failed", "Failed");
+  QVERIFY(!expanded(plain));
+
+  // but not one with an error, even a nested one.
+  failed->addEntry(LogEntry::Entry, "step")
+      ->addEntry(LogEntry::Error, "error");
+  QVERIFY(expanded(failed));
+  root->addEntry("next", "Next");
+  QVERIFY(expanded(failed));
+
+  // An error that comes later opens the collapsed entry.
+  LogEntry *late = root->addEntry("late", "Late");
+  LogEntry *step = late->addEntry(LogEntry::Entry, "step");
+  root->addEntry("other", "Other");
+  QVERIFY(!expanded(late));
+  step->addEntry(LogEntry::Error, "error");
+  QVERIFY(expanded(late));
+  QVERIFY(expanded(step));
+
+  // The user can still collapse it.
+  view.setEntryExpanded(late, false);
+  root->addEntry("last", "Last");
+  QVERIFY(!expanded(late));
 }
 
 void TestLog::copy() {

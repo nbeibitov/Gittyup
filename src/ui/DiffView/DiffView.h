@@ -83,6 +83,15 @@ public:
   bool scrollToFile(int index);
 
   /*!
+   * \brief scrollToConflict
+   * Scroll to a hunk of a file that is shown in the view.
+   * \param name Path of the file
+   * \param hunk Index of the hunk, negative for the start of the file
+   * \return false if the file isn't shown (yet)
+   */
+  bool scrollToConflict(const QString &name, int hunk);
+
+  /*!
    * \brief updateFiles
    * Call this function to update the visible diff files.
    * It fetches the files then from the diffTreeModel and the selection model

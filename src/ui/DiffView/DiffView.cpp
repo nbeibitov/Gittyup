@@ -16,6 +16,7 @@
 #include "ui/DiffTreeModel.h"
 #include "ui/DoubleTreeWidget.h"
 #include "ui/HotkeyManager.h"
+#include <QPointer>
 #include "ui/ProgressIndicator.h"
 #include "git/Tree.h"
 #include <QPainter>
@@ -268,6 +269,32 @@ bool DiffView::scrollToFile(int index) {
   // Scroll to the widget.
   verticalScrollBar()->setValue(mFiles.at(index)->y());
   return true;
+}
+
+bool DiffView::scrollToConflict(const QString &name, int hunk) {
+  for (FileWidget *file : mFiles) {
+    if (file->name() != name)
+      continue;
+
+    QList<HunkWidget *> hunks = file->hunks();
+    bool hasHunk = (hunk >= 0 && hunk < hunks.size());
+    file->header()->disclosureButton()->setChecked(true);
+    if (hasHunk)
+      hunks.at(hunk)->header()->button()->setChecked(true);
+
+    // Finish layout by processing events. May cause a new diff to
+    // be loaded. In that case the scroll widget will be different.
+    QPointer<QWidget> ptr = widget();
+    QCoreApplication::processEvents();
+    if (!ptr || widget() != ptr || !mFiles.contains(file))
+      return true;
+
+    int y = file->y() + (hasHunk ? hunks.at(hunk)->y() : 0);
+    verticalScrollBar()->setValue(y);
+    return true;
+  }
+
+  return false;
 }
 
 void DiffView::enable(bool enable) { mEnabled = enable; }
