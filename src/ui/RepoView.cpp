@@ -9,6 +9,8 @@
 
 #include "RepoView.h"
 #include "BlameEditor.h"
+#include "BranchList.h"
+#include "ConfigKeys.h"
 #include "CommitList.h"
 #include "CommitToolBar.h"
 #include "DetailView.h"
@@ -327,14 +329,36 @@ RepoView::RepoView(const git::Repository &repo, MainWindow *parent)
   mPathspec = new PathspecWidget(repo, header);
   headerLayout->addWidget(mPathspec);
 
-  // Create commit list.
-  mCommits = new CommitList(mIndex, mSideBar);
-  sidebarLayout->addWidget(mCommits);
+  // Create the branch list above the commit list.
+  QSplitter *historySplitter = new QSplitter(Qt::Vertical, mSideBar);
+  historySplitter->setChildrenCollapsible(false);
+  sidebarLayout->addWidget(historySplitter);
 
-  connect(commitToolBar, &CommitToolBar::settingsChanged, mCommits,
-          &CommitList::resetSettings);
+  mBranches = new BranchList(repo, historySplitter);
+  historySplitter->addWidget(mBranches);
+
+  // Create commit list.
+  mCommits = new CommitList(mIndex, historySplitter);
+  historySplitter->addWidget(mCommits);
+  historySplitter->setStretchFactor(0, 1);
+  historySplitter->setStretchFactor(1, 2);
+
+  connect(commitToolBar, &CommitToolBar::settingsChanged, this, [this] {
+    bool shown = !mBranches->isHidden();
+    updateBranchList();
+    mCommits->resetSettings();
+
+    // Back to all branches: the commit list marks HEAD again.
+    if (shown && mBranches->isHidden())
+      mRefs->select(mRepo.head());
+  });
   connect(mRefs, &ReferenceWidget::referenceChanged, mCommits,
           &CommitList::setReference);
+  connect(mRefs, &ReferenceWidget::referenceChanged, mBranches,
+          &BranchList::setCurrent);
+  connect(mBranches, &BranchList::referenceSelected, this,
+          [this](const git::Reference &ref) { mRefs->select(ref); });
+  updateBranchList();
   connect(mRefs, &ReferenceWidget::referenceSelected, mCommits,
           &CommitList::selectReference);
 
@@ -3743,6 +3767,15 @@ RepoView *RepoView::parentView(const QWidget *widget) {
 }
 
 bool RepoView::detailsMaximized() { return mMaximized; }
+
+void RepoView::updateBranchList() {
+  bool shown = mRepo.appConfig().value<bool>(ConfigKeys::kBranchesOnlyKey, false);
+  mBranches->setVisible(shown);
+  if (shown) {
+    mBranches->refresh();
+    mBranches->setCurrent(mRefs->currentReference());
+  }
+}
 
 void RepoView::showEvent(QShowEvent *event) {
   QSplitter::showEvent(event);

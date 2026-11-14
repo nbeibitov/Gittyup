@@ -175,7 +175,7 @@ CommitToolBar::CommitToolBar(QWidget *parent) : QToolBar(parent) {
   QAction *branches = menu->addAction(tr("Show Only Branches"));
   branches->setCheckable(true);
   branches->setToolTip(
-      tr("Show only the commits that branches point to and where they fork"));
+      tr("Show the branches above the history of the chosen one"));
   branches->setChecked(
       config.value<bool>(ConfigKeys::kBranchesOnlyKey, false));
   connect(branches, &QAction::triggered, [this](bool checked) {

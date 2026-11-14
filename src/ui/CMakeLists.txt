@@ -4,6 +4,7 @@ add_library(
   Badge.cpp
   BlameEditor.cpp
   BlameMargin.cpp
+  BranchList.cpp
   ColumnView.cpp
   CommitList.cpp
   CommitToolBar.cpp

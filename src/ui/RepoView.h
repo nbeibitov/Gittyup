@@ -33,6 +33,7 @@
 #include <QTimer>
 #include <functional>
 
+class BranchList;
 class CommitList;
 class QDateTime;
 class DetailView;
@@ -437,6 +438,9 @@ protected:
   void closeEvent(QCloseEvent *event) override;
 
 private:
+  // Show the branch list above the commit list when only branches are on.
+  void updateBranchList();
+
   struct SubmoduleInfo {
     git::Submodule submodule;
     git::Repository repo;
@@ -497,6 +501,7 @@ private:
   ReferenceWidget *mRefs;
   PathspecWidget *mPathspec;
   CommitList *mCommits;
+  BranchList *mBranches;
   DetailView *mDetails;
   QWidget *mSideBar;
 

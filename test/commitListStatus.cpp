@@ -11,7 +11,9 @@
 #include "git/Config.h"
 #include "git/Index.h"
 #include "git/Signature.h"
+#include "ui/BranchList.h"
 #include "ui/CommitList.h"
+#include "ui/CommitToolBar.h"
 #include "ui/ConfigKeys.h"
 #include "ui/DoubleTreeWidget.h"
 #include "ui/MainWindow.h"
@@ -653,37 +655,43 @@ void TestCommitListStatus::onlyBranches() {
     mRepo->appConfig().setValue(ConfigKeys::kRefsKey,
                                 (int)CommitList::RefsFilter::AllRefs);
     mRepo->appConfig().setValue(ConfigKeys::kBranchesOnlyKey, branches);
-    mCommits->resetSettings();
+    emit mView->findChild<CommitToolBar *>()->settingsChanged();
     QTest::qWait(100);
     QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
   };
 
-  show(false);
-  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("between"), 60000);
-  int all = summaries().size();
+  BranchList *branches = mView->findChild<BranchList *>();
+  QVERIFY(branches);
 
-  // The tips of the branches and the fork point, nothing in between.
+  show(false);
+  QVERIFY(branches->isHidden());
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("between"), 60000);
+  QVERIFY(summaries().contains("branch b"));
+
+  // The branches above, the history of the current one below.
   show(true);
-  QTRY_VERIFY_WITH_TIMEOUT(!summaries().contains("between"), 60000);
+  QVERIFY(!branches->isHidden());
+  QStringList names;
+  for (int i = 0; i < branches->topLevelItemCount(); ++i)
+    names.append(branches->topLevelItem(i)->text(0));
+  QVERIFY2(names.contains("brancha") && names.contains("branchb"),
+           qPrintable(names.join(", ")));
+  QTRY_VERIFY_WITH_TIMEOUT(!summaries().contains("branch b"), 60000);
+
+  // Choose branch b: its history without branch a.
+  branches->setCurrentItem(branches->topLevelItem(names.indexOf("branchb")));
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("branch b"), 60000);
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
   QStringList rows = summaries();
-  QVERIFY2(rows.contains("branch a") && rows.contains("branch b") &&
-               rows.contains("fork point"),
+  QVERIFY2(rows.contains("fork point") && !rows.contains("branch a") &&
+               !rows.contains("between") && !rows.contains("status"),
            qPrintable(rows.join(", ")));
-  QVERIFY2(rows.size() < all, qPrintable(rows.join(", ")));
 
-  // Branch a goes straight down to the fork point.
-  QAbstractItemModel *model = mCommits->model();
-  int rowA = rows.indexOf("branch a");
-  int rowFork = rows.indexOf("fork point");
-  QVERIFY(rowA < rowFork);
-  git::Commit commitA =
-      model->index(rowA, 0).data(CommitList::CommitRole).value<git::Commit>();
-  QVERIFY(commitA.isValid());
-  QVariant graph = model->index(rowA, 0).data(CommitList::GraphRole);
-  QVERIFY(graph.isValid());
-
+  // Back to all branches with HEAD.
   show(false);
+  QVERIFY(branches->isHidden());
   QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("between"), 60000);
+  QTRY_COMPARE_WITH_TIMEOUT(summaries().value(0), QString("status"), 60000);
 }
 
 void TestCommitListStatus::cleanupTestCase() {

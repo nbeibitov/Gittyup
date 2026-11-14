@@ -259,6 +259,15 @@ public:
       startStatus(false);
   }
 
+  // With the list of branches above, the history of the chosen branch only.
+  // The filter then picks the branches of that list.
+  CommitList::RefsFilter historyFilter() const {
+    if (mBranchesOnly &&
+        mRefsFilter != CommitList::RefsFilter::SelectedRefIgnoreMerge)
+      return CommitList::RefsFilter::SelectedRef;
+    return mRefsFilter;
+  }
+
   // Rebuild the walker and the first page of rows. The expensive part
   // (building the revwalk over all refs and computing the graph for the
   // first page of commits) runs on a background thread; see
@@ -305,7 +314,7 @@ public:
     QSet<git::Id> seen = mSeen;
     QString pathspec = mPathspec;
     bool graphVisible = mGraphVisible;
-    CommitList::RefsFilter refsFilter = mRefsFilter;
+    CommitList::RefsFilter refsFilter = historyFilter();
     int generation = mFetchGeneration;
 
     mFetch.setFuture(QtConcurrent::run([=]() mutable {
@@ -336,7 +345,7 @@ public:
     }
 
     FetchResult fetched = fetchRows(mWalker, mParents, mSeen, mPathspec,
-                                    mGraphVisible, mRefsFilter);
+                                    mGraphVisible, historyFilter());
     insertRows(std::move(fetched));
   }
 
@@ -473,7 +482,6 @@ private:
     bool graphVisible;
     bool sortDate;
     CommitList::RefsFilter refsFilter;
-    bool branchesOnly;
     bool showCleanStatus;
     git::Repository repo;
     git::Diff statusDiff;
@@ -539,14 +547,6 @@ private:
     emit fetchingChanged(false);
   }
 
-  // The parents of each commit in the graph of only branches.
-  using ParentMap = QHash<git::Id, QList<git::Commit>>;
-
-  static QList<git::Commit> parentsOf(const git::Commit &commit,
-                                      const ParentMap *simplified) {
-    return simplified ? simplified->value(commit.id()) : commit.parents();
-  }
-
   static int indexOf(const QList<Parent> &parents, const git::Commit &commit) {
     int count = parents.size();
     for (int i = 0; i < count; ++i) {
@@ -561,8 +561,7 @@ private:
   // The nextParents parameter represents the next row after this one.
   static QVector<Column> columns(const git::Commit &commit,
                                  const QList<Parent> &parents,
-                                 const QList<Parent> &nextParents, bool root,
-                                 const ParentMap *simplified = nullptr) {
+                                 const QList<Parent> &nextParents, bool root) {
     int count = parents.size();
     QVector<Column> columns(count);
 
@@ -577,7 +576,7 @@ private:
       QList<git::Commit> successors;
       const Parent &parent = parents.at(i);
       if (parent.commit == commit) {
-        successors = parentsOf(parent.commit, simplified);
+        successors = parent.commit.parents();
       } else {
         successors.append(parent.commit);
       }
@@ -648,57 +647,6 @@ private:
     return QColor();
   }
 
-  // Add the row of one commit, updating parents in place. The graph follows
-  // the simplified parents when given (only branches), the real ones else.
-  static void appendRow(const git::Commit &commit, QList<Parent> &parents,
-                        QSet<git::Id> &seen, const QString &pathspec,
-                        bool graphVisible, CommitList::RefsFilter refsFilter,
-                        QList<Row> &rows,
-                        const ParentMap *simplified = nullptr) {
-    // Add root commits.
-    bool root = false;
-    if (indexOf(parents, commit) < 0) {
-      root = true;
-      parents.append(Parent(commit, nextColor(parents)));
-    }
-
-    // Calculate graph columns.
-    // Remember current row.
-    QList<Parent> rowParents = parents;
-
-    // Replace commit with its parents.
-    QList<git::Commit> replacements;
-    for (const git::Commit &parent : parentsOf(commit, simplified)) {
-      // FIXME: Mark commits that point to existing parent?
-      if (indexOf(parents, parent) < 0 && !seen.contains(parent.id()))
-        replacements.append(parent);
-      if (refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge) {
-        break;
-      }
-    }
-
-    // Set parents for next row.
-    int index = indexOf(parents, commit);
-    if (index >= 0) {
-      Parent parent = parents.takeAt(index);
-      if (!replacements.isEmpty()) {
-        git::Commit replacement = replacements.takeFirst();
-        parents.insert(index, Parent(replacement, parent.color));
-        for (const git::Commit &replacement : replacements)
-          parents.append(Parent(replacement, nextColor(parents)));
-      }
-    }
-
-    // Add graph row.
-    QVector<Column> row;
-    if (graphVisible && pathspec.isEmpty())
-      row = columns(commit, rowParents, parents, root, simplified);
-
-    rows.append(Row(commit, row));
-    seen.insert(commit.id());
-    DebugRefresh("Append commit: " << commit.shortId());
-  }
-
   // Walk at most one page of commits, updating parents in place and
   // returning the new rows. Operates purely on its arguments (no access to
   // 'this' state) so it can run on a background thread as well as
@@ -712,8 +660,48 @@ private:
     int i = 0;
     git::Commit commit = walker.next(pathspec, canceled);
     while (commit.isValid()) {
-      appendRow(commit, parents, seen, pathspec, graphVisible, refsFilter,
-                result.rows);
+      // Add root commits.
+      bool root = false;
+      if (indexOf(parents, commit) < 0) {
+        root = true;
+        parents.append(Parent(commit, nextColor(parents)));
+      }
+
+      // Calculate graph columns.
+      // Remember current row.
+      QList<Parent> rowParents = parents;
+
+      // Replace commit with its parents.
+      QList<git::Commit> replacements;
+      for (const git::Commit &parent : commit.parents()) {
+        // FIXME: Mark commits that point to existing parent?
+        if (indexOf(parents, parent) < 0 && !seen.contains(parent.id()))
+          replacements.append(parent);
+        if (refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge) {
+          break;
+        }
+      }
+
+      // Set parents for next row.
+      int index = indexOf(parents, commit);
+      if (index >= 0) {
+        Parent parent = parents.takeAt(index);
+        if (!replacements.isEmpty()) {
+          git::Commit replacement = replacements.takeFirst();
+          parents.insert(index, Parent(replacement, parent.color));
+          for (const git::Commit &replacement : replacements)
+            parents.append(Parent(replacement, nextColor(parents)));
+        }
+      }
+
+      // Add graph row.
+      QVector<Column> row;
+      if (graphVisible && pathspec.isEmpty())
+        row = columns(commit, rowParents, parents, root);
+
+      result.rows.append(Row(commit, row));
+      seen.insert(commit.id());
+      DebugRefresh("Append commit: " << commit.shortId());
 
       // Bail out.
       if (i++ >= 64)
@@ -723,104 +711,6 @@ private:
     }
 
     result.exhausted = !commit.isValid();
-    return result;
-  }
-
-  // Only branches: walk the whole history and keep the commits that
-  // branches point to and the commits where the lines of those branches
-  // fork. The graph connects each kept commit to its nearest kept
-  // ancestors, so the commits in between are left out.
-  static FetchResult branchRows(git::RevWalk &walker,
-                                const QSet<git::Id> &tips,
-                                QList<Parent> &parents, QSet<git::Id> &seen,
-                                bool graphVisible,
-                                CommitList::RefsFilter refsFilter) {
-    // Children come before their parents (topological order).
-    QList<git::Commit> commits;
-    QHash<git::Id, int> indexes;
-    for (git::Commit commit = walker.next(); commit.isValid();
-         commit = walker.next()) {
-      indexes.insert(commit.id(), commits.size());
-      commits.append(commit);
-    }
-
-    int count = commits.size();
-    bool firstParent =
-        (refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
-    QVector<QVector<int>> parentIndexes(count);
-    for (int i = 0; i < count; ++i) {
-      for (const git::Commit &parent : commits.at(i).parents()) {
-        int index = indexes.value(parent.id(), -1);
-        if (index >= 0)
-          parentIndexes[i].append(index);
-        if (firstParent)
-          break;
-      }
-    }
-
-    auto unite = [](QVector<int> &set, const QVector<int> &other) {
-      for (int item : other) {
-        if (!set.contains(item))
-          set.append(item);
-      }
-    };
-
-    // From the newest: a commit is kept when a branch points to it, or when
-    // its children lead to different kept commits (a fork point). Each
-    // commit passes its nearest kept descendants on to its parents.
-    QVector<bool> kept(count, false);
-    QVector<QList<QVector<int>>> fromChildren(count);
-    for (int i = 0; i < count; ++i) {
-      QList<QVector<int>> sets = std::move(fromChildren[i]);
-      for (QVector<int> &set : sets)
-        std::sort(set.begin(), set.end());
-
-      bool fork = false;
-      for (int j = 1; j < sets.size() && !fork; ++j)
-        fork = (sets.at(j) != sets.first());
-
-      QVector<int> descendants;
-      if (tips.contains(commits.at(i).id()) || fork) {
-        kept[i] = true;
-        descendants.append(i);
-      } else {
-        for (const QVector<int> &set : sets)
-          unite(descendants, set);
-      }
-
-      if (!descendants.isEmpty()) {
-        for (int parent : parentIndexes.at(i))
-          fromChildren[parent].append(descendants);
-      }
-    }
-
-    // From the oldest: the nearest kept ancestors of each commit.
-    ParentMap simplified;
-    QVector<QVector<int>> ancestors(count);
-    for (int i = count - 1; i >= 0; --i) {
-      QVector<int> nearest;
-      for (int parent : parentIndexes.at(i))
-        unite(nearest, ancestors.at(parent));
-
-      if (kept.at(i)) {
-        QList<git::Commit> list;
-        for (int index : nearest)
-          list.append(commits.at(index));
-        simplified.insert(commits.at(i).id(), list);
-        ancestors[i] = {i};
-      } else {
-        ancestors[i] = nearest;
-      }
-    }
-
-    FetchResult result;
-    for (int i = 0; i < count; ++i) {
-      if (kept.at(i))
-        appendRow(commits.at(i), parents, seen, QString(), graphVisible,
-                  refsFilter, result.rows, &simplified);
-    }
-
-    result.exhausted = true;
     return result;
   }
 
@@ -866,65 +756,36 @@ private:
       sort |= GIT_SORT_TOPOLOGICAL;
     }
 
-    // Only branches needs children before their parents. Not for the history
-    // of a path, which shows the commits that change it.
-    bool branchesOnly = (ctx.branchesOnly && ctx.pathspec.isEmpty());
-    if (branchesOnly)
-      sort |= GIT_SORT_TOPOLOGICAL;
-
-    // The commits that the walked branches point to.
-    QSet<git::Id> tips;
-    auto addTip = [&tips](const git::Reference &ref) {
-      if (git::Commit target = ref.target())
-        tips.insert(target.id());
-    };
-
     if (!remotes.isEmpty()) {
       result.walker = remotes.first().walker(sort);
-      for (const git::Reference &ref : remotes) {
+      for (const git::Reference &ref : remotes)
         result.walker.push(ref);
-        addTip(ref);
-      }
     } else if (ctx.ref.isValid()) {
       result.walker = ctx.ref.walker(
           sort,
           ctx.refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
-      addTip(ctx.ref);
       bool localOnly = (ctx.refsFilter == CommitList::RefsFilter::LocalRefs);
       if (ctx.ref.isLocalBranch() && !localOnly) {
         // Add the upstream branch.
-        if (git::Branch upstream = git::Branch(ctx.ref).upstream()) {
+        if (git::Branch upstream = git::Branch(ctx.ref).upstream())
           result.walker.push(upstream);
-          addTip(upstream);
-        }
       }
 
       if (ctx.ref.isHead()) {
         // Add merge head.
-        if (git::Reference mergeHead = ctx.repo.lookupRef("MERGE_HEAD")) {
+        if (git::Reference mergeHead = ctx.repo.lookupRef("MERGE_HEAD"))
           result.walker.push(mergeHead);
-          addTip(mergeHead);
-        }
       }
 
       if (CommitList::showsAllRefs(ctx.refsFilter)) {
         for (const git::Reference &ref : ctx.repo.refs()) {
-          if (!ref.isStash() && !(localOnly && ref.isRemoteBranch())) {
+          if (!ref.isStash() && !(localOnly && ref.isRemoteBranch()))
             result.walker.push(ref);
-            if (!ref.isTag())
-              addTip(ref);
-          }
         }
       }
     }
 
-    if (result.walker.isValid() && branchesOnly) {
-      FetchResult fetched =
-          branchRows(result.walker, tips, result.parents, result.seen,
-                     ctx.graphVisible, ctx.refsFilter);
-      result.rows.append(fetched.rows);
-      result.walker = git::RevWalk();
-    } else if (result.walker.isValid()) {
+    if (result.walker.isValid()) {
       FetchResult fetched =
           fetchRows(result.walker, result.parents, result.seen, ctx.pathspec,
                     ctx.graphVisible, ctx.refsFilter);
@@ -946,8 +807,7 @@ private:
                      mPathspec,
                      mGraphVisible,
                      mSortDate,
-                     mRefsFilter,
-                     mBranchesOnly,
+                     historyFilter(),
                      mShowCleanStatus,
                      mRepo,
                      status(),

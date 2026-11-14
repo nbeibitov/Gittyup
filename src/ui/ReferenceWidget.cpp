@@ -29,6 +29,10 @@ const QString kLinkFmt =
 // The commit list shows all references and marks the chosen one, instead of
 // showing only the history of the chosen one.
 bool showsAllRefs(const git::Repository &repo) {
+  // The list of branches shows the history of the chosen one.
+  if (repo.appConfig().value<bool>(ConfigKeys::kBranchesOnlyKey, false))
+    return false;
+
   int filter = repo.appConfig().value<int>(
       ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::AllRefs);
   return CommitList::showsAllRefs(static_cast<CommitList::RefsFilter>(filter));
