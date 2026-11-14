@@ -482,6 +482,7 @@ private:
     bool graphVisible;
     bool sortDate;
     CommitList::RefsFilter refsFilter;
+    bool branchesOnly;
     bool showCleanStatus;
     git::Repository repo;
     git::Diff statusDiff;
@@ -714,6 +715,38 @@ private:
     return result;
   }
 
+  // The main branch of the remote of the given branch, local and remote:
+  // what refs/remotes/<remote>/HEAD points to, else main or master.
+  static QList<git::Reference> mainBranches(const git::Repository &repo,
+                                            const git::Reference &ref) {
+    QString remote = "origin";
+    if (ref.isRemoteBranch()) {
+      remote = ref.name().section('/', 0, 0);
+    } else if (git::Branch upstream = git::Branch(ref).upstream()) {
+      remote = upstream.name().section('/', 0, 0);
+    }
+
+    QString prefix = QString("refs/remotes/%1/").arg(remote);
+    QStringList names = {"main", "master"};
+    if (git::Reference head = repo.lookupRef(prefix + "HEAD")) {
+      QString target = head.symbolicTarget();
+      if (target.startsWith(prefix))
+        names = {target.mid(prefix.length())};
+    }
+
+    QList<git::Reference> result;
+    for (const QString &name : names) {
+      if (git::Reference local = repo.lookupRef("refs/heads/" + name))
+        result.append(local);
+      if (git::Reference tracking = repo.lookupRef(prefix + name))
+        result.append(tracking);
+      if (!result.isEmpty())
+        break;
+    }
+
+    return result;
+  }
+
   // Build the walker and the first page of rows. Safe to run off the GUI
   // thread: it only touches the context passed in and returns a fresh
   // result rather than mutating model state directly.
@@ -764,8 +797,24 @@ private:
       result.walker = ctx.ref.walker(
           sort,
           ctx.refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
+      // With the list of branches above, only the commits of the chosen
+      // branch: not those of the main branch, unless it is the main branch.
+      bool ownCommits = (ctx.branchesOnly && ctx.ref.isBranch());
+      if (ownCommits) {
+        QList<git::Reference> bases = mainBranches(ctx.repo, ctx.ref);
+        QString name = ctx.ref.qualifiedName();
+        bool main = std::any_of(
+            bases.begin(), bases.end(), [&name](const git::Reference &base) {
+              return name == base.qualifiedName();
+            });
+        if (!main) {
+          for (const git::Reference &base : bases)
+            result.walker.hide(base);
+        }
+      }
+
       bool localOnly = (ctx.refsFilter == CommitList::RefsFilter::LocalRefs);
-      if (ctx.ref.isLocalBranch() && !localOnly) {
+      if (ctx.ref.isLocalBranch() && !localOnly && !ownCommits) {
         // Add the upstream branch.
         if (git::Branch upstream = git::Branch(ctx.ref).upstream())
           result.walker.push(upstream);
@@ -808,6 +857,7 @@ private:
                      mGraphVisible,
                      mSortDate,
                      historyFilter(),
+                     mBranchesOnly,
                      mShowCleanStatus,
                      mRepo,
                      status(),

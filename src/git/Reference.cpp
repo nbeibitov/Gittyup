@@ -73,6 +73,10 @@ QString Reference::qualifiedName() const {
   return git_reference_name(d.data());
 }
 
+QString Reference::symbolicTarget() const {
+  return git_reference_symbolic_target(d.data());
+}
+
 RevWalk Reference::walker(int sort, bool firstCommitOnly) const {
   Commit commit = target();
   return commit.isValid() ? commit.walker(sort, firstCommitOnly) : RevWalk();

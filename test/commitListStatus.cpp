@@ -635,6 +635,17 @@ void TestCommitListStatus::onlyBranches() {
   QVERIFY(create(nullptr, "between", &fork, &between));
   QVERIFY(create("refs/heads/brancha", "branch a", &between, &a));
   QVERIFY(create("refs/heads/branchb", "branch b", &fork, &b));
+
+  // The HEAD branch is the main branch.
+  QString headSummary = mRepo->head().target().summary();
+  QString mainName = mRepo->head().name();
+  if (mainName != "main" && mainName != "master") {
+    mainName = "main";
+    git_reference *main = nullptr;
+    QVERIFY(!git_reference_create(&main, repo, "refs/heads/main", &oid, 0,
+                                  nullptr));
+    git_reference_free(main);
+  }
   git_signature_free(sig);
   git_tree_free(tree);
   git_commit_free(tip);
@@ -678,14 +689,21 @@ void TestCommitListStatus::onlyBranches() {
            qPrintable(names.join(", ")));
   QTRY_VERIFY_WITH_TIMEOUT(!summaries().contains("branch b"), 60000);
 
-  // Choose branch b: its history without branch a.
+  // The main branch: its whole history.
+  QVERIFY2(names.contains(mainName), qPrintable(names.join(", ")));
+  branches->setCurrentItem(branches->topLevelItem(names.indexOf(mainName)));
+  QTest::qWait(100);
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  QTRY_VERIFY2_WITH_TIMEOUT(summaries().contains(headSummary),
+                            qPrintable(mainName + ": " + summaries().join(", ")),
+                            60000);
+
+  // Choose branch b: its own commits, not those of the main branch.
   branches->setCurrentItem(branches->topLevelItem(names.indexOf("branchb")));
   QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("branch b"), 60000);
   QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
   QStringList rows = summaries();
-  QVERIFY2(rows.contains("fork point") && !rows.contains("branch a") &&
-               !rows.contains("between") && !rows.contains("status"),
-           qPrintable(rows.join(", ")));
+  QCOMPARE(rows, QStringList({"branch b", "fork point"}));
 
   // Back to all branches with HEAD.
   show(false);

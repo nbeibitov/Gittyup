@@ -46,6 +46,9 @@ public:
   QString name(bool decorateDetachedHead = true) const;
   QString qualifiedName() const;
 
+  // The name of the reference that a symbolic reference points to, if any.
+  QString symbolicTarget() const;
+
   // Create a walker over the referenced commit.
   RevWalk walker(int sort = GIT_SORT_NONE, bool firstCommitOnly = false) const;
 
