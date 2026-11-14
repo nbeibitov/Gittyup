@@ -6,4 +6,5 @@ const QString kRefsKey = "commit.refs.all";
 const QString kSortKey = "commit.sort.date";
 const QString kGraphKey = "commit.graph.visible";
 const QString kStatusKey = "commit.show.status";
+const QString kBranchesOnlyKey = "commit.graph.branches";
 } // namespace ConfigKeys

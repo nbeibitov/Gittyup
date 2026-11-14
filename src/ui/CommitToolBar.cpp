@@ -172,6 +172,18 @@ CommitToolBar::CommitToolBar(QWidget *parent) : QToolBar(parent) {
     emit settingsChanged();
   });
 
+  QAction *branches = menu->addAction(tr("Show Only Branches"));
+  branches->setCheckable(true);
+  branches->setToolTip(
+      tr("Show only the commits that branches point to and where they fork"));
+  branches->setChecked(
+      config.value<bool>(ConfigKeys::kBranchesOnlyKey, false));
+  connect(branches, &QAction::triggered, [this](bool checked) {
+    RepoView *view = RepoView::parentView(this);
+    view->repo().appConfig().setValue(ConfigKeys::kBranchesOnlyKey, checked);
+    emit settingsChanged();
+  });
+
   menu->addSeparator();
 
   QAction *compact = menu->addAction(tr("Compact Mode"));

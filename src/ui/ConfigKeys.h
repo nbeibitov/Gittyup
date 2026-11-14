@@ -8,6 +8,7 @@ extern const QString kRefsKey;
 extern const QString kSortKey;
 extern const QString kGraphKey;
 extern const QString kStatusKey;
+extern const QString kBranchesOnlyKey;
 } // namespace ConfigKeys
 
 #endif // CONFIGKEYS_H

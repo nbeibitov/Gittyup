@@ -48,6 +48,7 @@ private slots:
   void topologicalFindsCommit();
   void chooseHeadBranch();
   void localAndRemoteBranches();
+  void onlyBranches();
   void cleanupTestCase();
 
 private:
@@ -598,6 +599,91 @@ void TestCommitListStatus::localAndRemoteBranches() {
   QVERIFY(!summaries().contains("status"));
 
   show(CommitList::RefsFilter::AllRefs);
+}
+
+void TestCommitListStatus::onlyBranches() {
+  // Two branches fork at an unnamed commit after HEAD:
+  // HEAD - fork point - between - branch a
+  //                   \ branch b
+  git_repository *repo = nullptr;
+  QVERIFY(!git_repository_open(&repo, mRepo->workdir().path().toUtf8()));
+  git_signature *sig = nullptr;
+  QVERIFY(!git_signature_now(&sig, "Test", "test@example.com"));
+  git_oid oid;
+  QVERIFY(!git_reference_name_to_id(&oid, repo, "HEAD"));
+  git_commit *tip = nullptr;
+  QVERIFY(!git_commit_lookup(&tip, repo, &oid));
+  git_tree *tree = nullptr;
+  QVERIFY(!git_commit_tree(&tree, tip));
+
+  auto create = [&](const char *ref, const char *message, git_oid *parentId,
+                    git_oid *id) {
+    git_commit *parent = nullptr;
+    if (git_commit_lookup(&parent, repo, parentId))
+      return false;
+    const git_commit *parents[] = {parent};
+    bool ok = !git_commit_create(id, repo, ref, sig, sig, nullptr, message,
+                                 tree, 1, parents);
+    git_commit_free(parent);
+    return ok;
+  };
+
+  git_oid fork, between, a, b;
+  QVERIFY(create(nullptr, "fork point", &oid, &fork));
+  QVERIFY(create(nullptr, "between", &fork, &between));
+  QVERIFY(create("refs/heads/brancha", "branch a", &between, &a));
+  QVERIFY(create("refs/heads/branchb", "branch b", &fork, &b));
+  git_signature_free(sig);
+  git_tree_free(tree);
+  git_commit_free(tip);
+  git_repository_free(repo);
+  emit mRepo->notifier()->referenceUpdated(mRepo->head());
+
+  auto summaries = [this] {
+    QStringList result;
+    QAbstractItemModel *model = mCommits->model();
+    for (int row = 0; row < model->rowCount(); ++row) {
+      git::Commit commit =
+          model->index(row, 0).data(CommitList::CommitRole).value<git::Commit>();
+      result.append(commit.isValid() ? commit.summary() : QString("status"));
+    }
+    return result;
+  };
+  auto show = [this](bool branches) {
+    mRepo->appConfig().setValue(ConfigKeys::kRefsKey,
+                                (int)CommitList::RefsFilter::AllRefs);
+    mRepo->appConfig().setValue(ConfigKeys::kBranchesOnlyKey, branches);
+    mCommits->resetSettings();
+    QTest::qWait(100);
+    QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  };
+
+  show(false);
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("between"), 60000);
+  int all = summaries().size();
+
+  // The tips of the branches and the fork point, nothing in between.
+  show(true);
+  QTRY_VERIFY_WITH_TIMEOUT(!summaries().contains("between"), 60000);
+  QStringList rows = summaries();
+  QVERIFY2(rows.contains("branch a") && rows.contains("branch b") &&
+               rows.contains("fork point"),
+           qPrintable(rows.join(", ")));
+  QVERIFY2(rows.size() < all, qPrintable(rows.join(", ")));
+
+  // Branch a goes straight down to the fork point.
+  QAbstractItemModel *model = mCommits->model();
+  int rowA = rows.indexOf("branch a");
+  int rowFork = rows.indexOf("fork point");
+  QVERIFY(rowA < rowFork);
+  git::Commit commitA =
+      model->index(rowA, 0).data(CommitList::CommitRole).value<git::Commit>();
+  QVERIFY(commitA.isValid());
+  QVariant graph = model->index(rowA, 0).data(CommitList::GraphRole);
+  QVERIFY(graph.isValid());
+
+  show(false);
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("between"), 60000);
 }
 
 void TestCommitListStatus::cleanupTestCase() {
