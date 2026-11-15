@@ -18,8 +18,12 @@
 #include "ui/DoubleTreeWidget.h"
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
+#include "index/Index.h"
+#include <QProcess>
 #include "log/LogEntry.h"
 #include "git2/commit.h"
+#include "git2/index.h"
+#include "git2/blob.h"
 #include "git2/refs.h"
 #include "git2/repository.h"
 #include "git2/signature.h"
@@ -51,6 +55,7 @@ private slots:
   void chooseHeadBranch();
   void localAndRemoteBranches();
   void onlyBranches();
+  void pathFilter();
   void cleanupTestCase();
 
 private:
@@ -731,6 +736,98 @@ void TestCommitListStatus::onlyBranches() {
   QVERIFY(branches->isHidden());
   QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("between"), 60000);
   QTRY_COMPARE_WITH_TIMEOUT(summaries().value(0), QString("status"), 60000);
+}
+
+void TestCommitListStatus::pathFilter() {
+  QString indexer = QDir(QCoreApplication::applicationDirPath())
+                        .filePath("../gittyup-indexer.exe");
+  if (!QFileInfo(indexer).isFile())
+    QSKIP("No indexer");
+
+  // A commit on another branch adds docs/guide/intro.txt.
+  git_repository *repo = nullptr;
+  QVERIFY(!git_repository_open(&repo, mRepo->workdir().path().toUtf8()));
+  git_signature *sig = nullptr;
+  QVERIFY(!git_signature_now(&sig, "Test", "test@example.com"));
+  git_oid oid;
+  QVERIFY(!git_reference_name_to_id(&oid, repo, "HEAD"));
+  git_commit *tip = nullptr;
+  QVERIFY(!git_commit_lookup(&tip, repo, &oid));
+  git_tree *tree = nullptr;
+  QVERIFY(!git_commit_tree(&tree, tip));
+
+  git_index *index = nullptr;
+  QVERIFY(!git_index_new(&index));
+  QVERIFY(!git_index_read_tree(index, tree));
+  const char content[] = "intro\n";
+  git_oid blob;
+  QVERIFY(!git_blob_create_from_buffer(&blob, repo, content,
+                                       sizeof(content) - 1));
+  git_index_entry entry = {};
+  entry.mode = GIT_FILEMODE_BLOB;
+  entry.id = blob;
+  entry.path = "docs/guide/intro.txt";
+  QVERIFY(!git_index_add(index, &entry));
+  git_oid treeId;
+  QVERIFY(!git_index_write_tree_to(&treeId, index, repo));
+  git_tree *newTree = nullptr;
+  QVERIFY(!git_tree_lookup(&newTree, repo, &treeId));
+  const git_commit *parents[] = {tip};
+  git_oid commit;
+  QVERIFY(!git_commit_create(&commit, repo, "refs/heads/docs", sig, sig,
+                             nullptr, "path commit", newTree, 1, parents));
+  git_tree_free(newTree);
+  git_index_free(index);
+  git_signature_free(sig);
+  git_tree_free(tree);
+  git_commit_free(tip);
+  git_repository_free(repo);
+  emit mRepo->notifier()->referenceUpdated(mRepo->head());
+
+  // Index the repository.
+  QCOMPARE(QProcess::execute(indexer, {mRepo->dir().path()}), 0);
+  mView->index()->reset();
+  QVERIFY(mView->index()->isValid());
+
+  auto summaries = [this] {
+    QStringList result;
+    QAbstractItemModel *model = mCommits->model();
+    for (int row = 0; row < model->rowCount(); ++row) {
+      git::Commit commit =
+          model->index(row, 0).data(CommitList::CommitRole).value<git::Commit>();
+      result.append(commit.isValid() ? commit.summary() : QString("status"));
+    }
+    return result;
+  };
+  auto show = [this](CommitList::RefsFilter filter) {
+    mRepo->appConfig().setValue(ConfigKeys::kRefsKey, (int)filter);
+    mRepo->appConfig().setValue(ConfigKeys::kBranchesOnlyKey, false);
+    emit mView->findChild<CommitToolBar *>()->settingsChanged();
+    QTest::qWait(100);
+    QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  };
+
+  // All branches: the beginning of the path finds it, ignoring case.
+  show(CommitList::RefsFilter::AllRefs);
+  mCommits->setPathspec("docs/gu", true);
+  QCOMPARE(summaries(), QStringList({"path commit"}));
+  mCommits->setPathspec("DOCS/GUIDE/INTRO.TXT", true);
+  QCOMPARE(summaries(), QStringList({"path commit"}));
+  mCommits->setPathspec("docs/x", true);
+  QCOMPARE(summaries(), QStringList());
+
+  // Only the history of HEAD: the commit is on another branch.
+  mCommits->setPathspec("docs/gu", true);
+  show(CommitList::RefsFilter::SelectedRef);
+  QCOMPARE(summaries(), QStringList());
+
+  // Within the history of HEAD.
+  mCommits->setPathspec("b.t", true);
+  QVERIFY2(summaries().contains("B"), qPrintable(summaries().join(", ")));
+
+  mCommits->setPathspec(QString(), true);
+  show(CommitList::RefsFilter::AllRefs);
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("path commit"), 60000);
 }
 
 void TestCommitListStatus::cleanupTestCase() {

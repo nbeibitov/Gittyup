@@ -8,6 +8,7 @@
 //
 
 #include "Index.h"
+#include <QRegularExpression>
 #include "GenericLexer.h"
 #include "LPegLexer.h"
 #include "Query.h"
@@ -254,6 +255,36 @@ QList<git::Commit> Index::commits(const QString &filter) const {
             });
 
   return commits;
+}
+
+QList<git::Commit> Index::pathCommits(const QString &path) const {
+  QString text = path.trimmed();
+  text.replace('\\', '/');
+  if (text.isEmpty())
+    return QList<git::Commit>();
+
+  Predicate pred;
+  if (text.contains('*') || text.contains('?')) {
+    QRegularExpression re(
+        QRegularExpression::fromWildcard(text, Qt::CaseInsensitive));
+    pred = [re](const QByteArray &word) {
+      return re.match(QString::fromUtf8(word)).hasMatch();
+    };
+  } else {
+    QByteArray prefix = text.toUtf8().toLower();
+    pred = [prefix](const QByteArray &word) {
+      return word.size() >= prefix.size() &&
+             word.left(prefix.size()).toLower() == prefix;
+    };
+  }
+
+  QList<git::Commit> result = commits(postings(pred, Path));
+  std::sort(result.begin(), result.end(),
+            [](const git::Commit &lhs, const git::Commit &rhs) {
+              return (lhs.committer().date() > rhs.committer().date());
+            });
+
+  return result;
 }
 
 QList<git::Commit> Index::commits(const QList<Posting> &postings) const {

@@ -51,7 +51,6 @@ namespace {
 // FIXME: Factor out into theme?
 const QColor kTaintedColor = Qt::gray;
 
-const QString kPathspecFmt = "pathspec:%1";
 
 // Use fixed short id size in compact mode.
 // FIXME: Use 'core.abbrev' config instead?
@@ -231,14 +230,34 @@ public:
 
   bool isResetWalkerSuppressed() { return mSuppressResetWalker; }
 
+  // The commits of the history that the rows show, to keep the commits
+  // that the search index finds for a path in it. Kept until it changes.
+  const QSet<git::Id> &historyIds() {
+    if (!mHistoryIdsValid) {
+      mHistoryIds.clear();
+      ResetContext ctx = resetContext(false);
+      git::RevWalk walker = historyWalker(ctx, remoteRefs(ctx), GIT_SORT_NONE);
+      if (walker.isValid()) {
+        for (git::Commit commit = walker.next(); commit.isValid();
+             commit = walker.next())
+          mHistoryIds.insert(commit.id());
+      }
+      mHistoryIdsValid = true;
+    }
+
+    return mHistoryIds;
+  }
+
   void setReference(const git::Reference &ref) {
     mRef = ref;
+    mHistoryIdsValid = false;
     if (!mSuppressResetWalker) {
       resetWalker();
     }
   }
 
   void resetReference(const git::Reference &ref) {
+    mHistoryIdsValid = false;
     // Reset selected ref to updated ref.
     if (ref.isValid() && mRef.isValid() &&
         ref.qualifiedName() == mRef.qualifiedName())
@@ -275,6 +294,7 @@ public:
   void resetWalker() { dispatchResetWalker(false); }
 
   void resetSettings(bool walk = false) {
+    mHistoryIdsValid = false;
     git::Config config = mRepo.appConfig();
     mRefsFilter = static_cast<CommitList::RefsFilter>(config.value<int>(
         ConfigKeys::kRefsKey, (int)CommitList::RefsFilter::AllRefs));
@@ -770,6 +790,62 @@ private:
     }
   }
 
+  // The remote branches when only they are shown.
+  static QList<git::Reference> remoteRefs(const ResetContext &ctx) {
+    QList<git::Reference> remotes;
+    if (ctx.refsFilter == CommitList::RefsFilter::RemoteRefs) {
+      for (const git::Reference &ref : ctx.repo.refs()) {
+        if (ref.isRemoteBranch())
+          remotes.append(ref);
+      }
+    }
+
+    return remotes;
+  }
+
+  // A walker over the history that the rows show.
+  static git::RevWalk historyWalker(const ResetContext &ctx,
+                                    const QList<git::Reference> &remotes,
+                                    int sort) {
+    git::RevWalk walker;
+    if (!remotes.isEmpty()) {
+      walker = remotes.first().walker(sort);
+      for (const git::Reference &ref : remotes)
+        walker.push(ref);
+    } else if (ctx.ref.isValid()) {
+      walker = ctx.ref.walker(
+          sort,
+          ctx.refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
+      // With the list of branches above, the commits of the chosen branch
+      // since it started, the whole history of a main branch.
+      bool ownCommits = (ctx.branchesOnly && ctx.ref.isBranch());
+      if (ownCommits && !isMainBranch(ctx.repo, ctx.ref))
+        hideOtherBranches(ctx.repo, ctx.ref, walker);
+
+      bool localOnly = (ctx.refsFilter == CommitList::RefsFilter::LocalRefs);
+      if (ctx.ref.isLocalBranch() && !localOnly && !ownCommits) {
+        // Add the upstream branch.
+        if (git::Branch upstream = git::Branch(ctx.ref).upstream())
+          walker.push(upstream);
+      }
+
+      if (ctx.ref.isHead()) {
+        // Add merge head.
+        if (git::Reference mergeHead = ctx.repo.lookupRef("MERGE_HEAD"))
+          walker.push(mergeHead);
+      }
+
+      if (CommitList::showsAllRefs(ctx.refsFilter)) {
+        for (const git::Reference &ref : ctx.repo.refs()) {
+          if (!ref.isStash() && !(localOnly && ref.isRemoteBranch()))
+            walker.push(ref);
+        }
+      }
+    }
+
+    return walker;
+  }
+
   // Build the walker and the first page of rows. Safe to run off the GUI
   // thread: it only touches the context passed in and returns a fresh
   // result rather than mutating model state directly.
@@ -780,14 +856,7 @@ private:
       result.head = head.target().id();
 
     // Only remote branches: the working directory doesn't belong to them.
-    bool remoteOnly = (ctx.refsFilter == CommitList::RefsFilter::RemoteRefs);
-    QList<git::Reference> remotes;
-    if (remoteOnly) {
-      for (const git::Reference &ref : ctx.repo.refs()) {
-        if (ref.isRemoteBranch())
-          remotes.append(ref);
-      }
-    }
+    QList<git::Reference> remotes = remoteRefs(ctx);
 
     // Update status row.
     bool head = (!ctx.ref.isValid() || ctx.ref.isHead()) && remotes.isEmpty();
@@ -812,40 +881,7 @@ private:
       sort |= GIT_SORT_TOPOLOGICAL;
     }
 
-    if (!remotes.isEmpty()) {
-      result.walker = remotes.first().walker(sort);
-      for (const git::Reference &ref : remotes)
-        result.walker.push(ref);
-    } else if (ctx.ref.isValid()) {
-      result.walker = ctx.ref.walker(
-          sort,
-          ctx.refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
-      // With the list of branches above, the commits of the chosen branch
-      // since it started, the whole history of a main branch.
-      bool ownCommits = (ctx.branchesOnly && ctx.ref.isBranch());
-      if (ownCommits && !isMainBranch(ctx.repo, ctx.ref))
-        hideOtherBranches(ctx.repo, ctx.ref, result.walker);
-
-      bool localOnly = (ctx.refsFilter == CommitList::RefsFilter::LocalRefs);
-      if (ctx.ref.isLocalBranch() && !localOnly && !ownCommits) {
-        // Add the upstream branch.
-        if (git::Branch upstream = git::Branch(ctx.ref).upstream())
-          result.walker.push(upstream);
-      }
-
-      if (ctx.ref.isHead()) {
-        // Add merge head.
-        if (git::Reference mergeHead = ctx.repo.lookupRef("MERGE_HEAD"))
-          result.walker.push(mergeHead);
-      }
-
-      if (CommitList::showsAllRefs(ctx.refsFilter)) {
-        for (const git::Reference &ref : ctx.repo.refs()) {
-          if (!ref.isStash() && !(localOnly && ref.isRemoteBranch()))
-            result.walker.push(ref);
-        }
-      }
-    }
+    result.walker = historyWalker(ctx, remotes, sort);
 
     if (result.walker.isValid()) {
       FetchResult fetched =
@@ -864,18 +900,23 @@ private:
   // previous rows (behind a loading indicator, see CommitList::setLoading)
   // until the background computation finishes and applyResetResult() swaps
   // the new data in.
+  ResetContext resetContext(bool emitStatusFinishedAfter) {
+    return ResetContext{mRef,
+                        mPathspec,
+                        mGraphVisible,
+                        mSortDate,
+                        historyFilter(),
+                        mBranchesOnly,
+                        mShowCleanStatus,
+                        mRepo,
+                        status(),
+                        mStatus.isFinished(),
+                        emitStatusFinishedAfter};
+  }
+
   void dispatchResetWalker(bool emitStatusFinishedAfter) {
-    ResetContext ctx{mRef,
-                     mPathspec,
-                     mGraphVisible,
-                     mSortDate,
-                     historyFilter(),
-                     mBranchesOnly,
-                     mShowCleanStatus,
-                     mRepo,
-                     status(),
-                     mStatus.isFinished(),
-                     emitStatusFinishedAfter};
+    ResetContext ctx = resetContext(emitStatusFinishedAfter);
+    mHistoryIdsValid = false;
 
     emit loadingChanged(true);
     mReset.setFuture(QtConcurrent::run([ctx] { return computeReset(ctx); }));
@@ -972,6 +1013,9 @@ private:
   bool mShowCleanStatus = true;
   bool mGraphVisible = true;
   bool mBranchesOnly = false;
+
+  QSet<git::Id> mHistoryIds;
+  bool mHistoryIdsValid = false;
 };
 
 /*!
@@ -1765,10 +1809,14 @@ void CommitList::setFilter(const QString &filter) {
 }
 
 void CommitList::setPathspec(const QString &pathspec, bool index) {
-  if (index) {
-    setFilter(!pathspec.isEmpty() ? kPathspecFmt.arg(pathspec) : QString());
+  // Without a search index walk the history for the path.
+  if (index && mIndex->isValid()) {
+    mPathFilter = pathspec.trimmed();
+    updateModel();
   } else {
+    mPathFilter.clear();
     static_cast<CommitModel *>(mModel)->setPathspec(pathspec);
+    updateModel();
   }
 }
 
@@ -2109,6 +2157,10 @@ bool CommitList::isResetWalkerSuppressed() {
 
 void CommitList::resetSettings() {
   static_cast<CommitModel *>(mModel)->resetSettings(true);
+
+  // The path filter keeps to the history of the new settings.
+  if (!mPathFilter.isEmpty())
+    updateModel();
 }
 
 void CommitList::setModel(QAbstractItemModel *model) {
@@ -2557,6 +2609,27 @@ void CommitList::restoreSelection() {
 }
 
 void CommitList::updateModel() {
+  if (!mPathFilter.isEmpty()) {
+    // The commits of the shown history that change paths starting with it.
+    const QSet<git::Id> &history =
+        static_cast<CommitModel *>(mModel)->historyIds();
+    QSet<git::Id> search;
+    if (!mFilter.isEmpty()) {
+      for (const git::Commit &commit : mIndex->commits(mFilter))
+        search.insert(commit.id());
+    }
+
+    QList<git::Commit> commits;
+    for (const git::Commit &commit : mIndex->pathCommits(mPathFilter)) {
+      if (history.contains(commit.id()) &&
+          (mFilter.isEmpty() || search.contains(commit.id())))
+        commits.append(commit);
+    }
+
+    setCommits(commits);
+    return;
+  }
+
   if (!mFilter.isEmpty()) {
     setCommits(mIndex->commits(mFilter));
     return;

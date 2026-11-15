@@ -94,6 +94,10 @@ public:
   bool write(const PostingMap &map);
 
   QList<git::Commit> commits(const QString &filter) const;
+
+  // The commits that change a path that starts with the given text (or
+  // matches it with wildcards), ignoring case. The newest first.
+  QList<git::Commit> pathCommits(const QString &path) const;
   QList<git::Commit> commits(const QList<Posting> &postings) const;
 
   QList<Posting> postings(const Term &term, bool positional = false) const;

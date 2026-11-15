@@ -185,6 +185,9 @@ private:
   Index *mIndex;
   QString mFilter;
 
+  // The path that the search index looks up, within the shown history.
+  QString mPathFilter;
+
   QAbstractListModel *mList;
   QAbstractListModel *mModel;
 
