@@ -715,10 +715,20 @@ private:
     return result;
   }
 
-  // The main branch of the remote of the given branch, local and remote:
-  // what refs/remotes/<remote>/HEAD points to, else main or master.
-  static QList<git::Reference> mainBranches(const git::Repository &repo,
-                                            const git::Reference &ref) {
+  // The name of a branch without its remote: master for origin/master.
+  static QString shortName(const git::Reference &ref) {
+    QString name = ref.name();
+    return ref.isRemoteBranch() ? name.section('/', 1) : name;
+  }
+
+  // The main branches start with the repository and show their whole
+  // history: main, master and what refs/remotes/<remote>/HEAD points to.
+  static bool isMainBranch(const git::Repository &repo,
+                           const git::Reference &ref) {
+    QString name = shortName(ref);
+    if (name == "main" || name == "master")
+      return true;
+
     QString remote = "origin";
     if (ref.isRemoteBranch()) {
       remote = ref.name().section('/', 0, 0);
@@ -727,24 +737,37 @@ private:
     }
 
     QString prefix = QString("refs/remotes/%1/").arg(remote);
-    QStringList names = {"main", "master"};
-    if (git::Reference head = repo.lookupRef(prefix + "HEAD")) {
-      QString target = head.symbolicTarget();
-      if (target.startsWith(prefix))
-        names = {target.mid(prefix.length())};
+    git::Reference head = repo.lookupRef(prefix + "HEAD");
+    return head.isValid() && head.symbolicTarget() == prefix + name;
+  }
+
+  // Leave out what the branch has in common with the branches it started
+  // from: every other branch that doesn't contain it. The branches that it
+  // was merged into contain it; its upstream and the branches of the same
+  // name on the remotes are the same branch.
+  static void hideOtherBranches(const git::Repository &repo,
+                                const git::Reference &ref,
+                                git::RevWalk &walker) {
+    git::Commit tip = ref.target();
+    QString name = shortName(ref);
+    QString upstream;
+    if (ref.isLocalBranch()) {
+      if (git::Branch branch = git::Branch(ref).upstream())
+        upstream = branch.qualifiedName();
     }
 
-    QList<git::Reference> result;
-    for (const QString &name : names) {
-      if (git::Reference local = repo.lookupRef("refs/heads/" + name))
-        result.append(local);
-      if (git::Reference tracking = repo.lookupRef(prefix + name))
-        result.append(tracking);
-      if (!result.isEmpty())
-        break;
-    }
+    for (const git::Reference &other : repo.refs()) {
+      if (!other.isBranch() || shortName(other) == name ||
+          other.qualifiedName() == upstream)
+        continue;
 
-    return result;
+      // The symbolic HEAD of a remote is no branch of its own.
+      if (other.isRemoteBranch() && other.name().endsWith("/HEAD"))
+        continue;
+
+      if (!other.target().contains(tip))
+        walker.hide(other);
+    }
   }
 
   // Build the walker and the first page of rows. Safe to run off the GUI
@@ -797,21 +820,11 @@ private:
       result.walker = ctx.ref.walker(
           sort,
           ctx.refsFilter == CommitList::RefsFilter::SelectedRefIgnoreMerge);
-      // With the list of branches above, only the commits of the chosen
-      // branch: not those of the main branch, unless it is the main branch.
+      // With the list of branches above, the commits of the chosen branch
+      // since it started, the whole history of a main branch.
       bool ownCommits = (ctx.branchesOnly && ctx.ref.isBranch());
-      if (ownCommits) {
-        QList<git::Reference> bases = mainBranches(ctx.repo, ctx.ref);
-        QString name = ctx.ref.qualifiedName();
-        bool main = std::any_of(
-            bases.begin(), bases.end(), [&name](const git::Reference &base) {
-              return name == base.qualifiedName();
-            });
-        if (!main) {
-          for (const git::Reference &base : bases)
-            result.walker.hide(base);
-        }
-      }
+      if (ownCommits && !isMainBranch(ctx.repo, ctx.ref))
+        hideOtherBranches(ctx.repo, ctx.ref, result.walker);
 
       bool localOnly = (ctx.refsFilter == CommitList::RefsFilter::LocalRefs);
       if (ctx.ref.isLocalBranch() && !localOnly && !ownCommits) {

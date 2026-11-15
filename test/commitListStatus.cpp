@@ -636,6 +636,20 @@ void TestCommitListStatus::onlyBranches() {
   QVERIFY(create("refs/heads/brancha", "branch a", &between, &a));
   QVERIFY(create("refs/heads/branchb", "branch b", &fork, &b));
 
+  // Both branches are merged into another one, like into a test branch.
+  {
+    git_commit *ca = nullptr, *cb = nullptr;
+    QVERIFY(!git_commit_lookup(&ca, repo, &a));
+    QVERIFY(!git_commit_lookup(&cb, repo, &b));
+    const git_commit *parents[] = {ca, cb};
+    git_oid merge;
+    QVERIFY(!git_commit_create(&merge, repo, "refs/heads/integration", sig,
+                               sig, nullptr, "integration", tree, 2,
+                               parents));
+    git_commit_free(ca);
+    git_commit_free(cb);
+  }
+
   // The HEAD branch is the main branch.
   QString headSummary = mRepo->head().target().summary();
   QString mainName = mRepo->head().name();
@@ -698,12 +712,19 @@ void TestCommitListStatus::onlyBranches() {
                             qPrintable(mainName + ": " + summaries().join(", ")),
                             60000);
 
-  // Choose branch b: its own commits, not those of the main branch.
+  // Choose branch b: its commits since it started from the fork point,
+  // although it is merged into another branch.
   branches->setCurrentItem(branches->topLevelItem(names.indexOf("branchb")));
   QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("branch b"), 60000);
   QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
   QStringList rows = summaries();
-  QCOMPARE(rows, QStringList({"branch b", "fork point"}));
+  QCOMPARE(rows, QStringList({"branch b"}));
+
+  // Branch a started from the fork point too.
+  branches->setCurrentItem(branches->topLevelItem(names.indexOf("brancha")));
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("branch a"), 60000);
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  QCOMPARE(summaries(), QStringList({"branch a", "between"}));
 
   // Back to all branches with HEAD.
   show(false);
