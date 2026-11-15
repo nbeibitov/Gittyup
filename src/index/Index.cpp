@@ -265,16 +265,19 @@ QList<git::Commit> Index::pathCommits(const QString &path) const {
 
   Predicate pred;
   if (text.contains('*') || text.contains('?')) {
-    QRegularExpression re(
-        QRegularExpression::fromWildcard(text, Qt::CaseInsensitive));
+    // Anywhere in the path, '*' also crosses directories.
+    QRegularExpression re(QRegularExpression::fromWildcard(
+        text, Qt::CaseInsensitive,
+        QRegularExpression::UnanchoredWildcardConversion |
+            QRegularExpression::NonPathWildcardConversion));
     pred = [re](const QByteArray &word) {
       return re.match(QString::fromUtf8(word)).hasMatch();
     };
   } else {
-    QByteArray prefix = text.toUtf8().toLower();
-    pred = [prefix](const QByteArray &word) {
-      return word.size() >= prefix.size() &&
-             word.left(prefix.size()).toLower() == prefix;
+    // Any part of the path: a directory, a file name or its beginning.
+    QByteArray part = text.toUtf8().toLower();
+    pred = [part](const QByteArray &word) {
+      return word.size() >= part.size() && word.toLower().contains(part);
     };
   }
 

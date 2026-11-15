@@ -813,6 +813,12 @@ void TestCommitListStatus::pathFilter() {
   QCOMPARE(summaries(), QStringList({"path commit"}));
   mCommits->setPathspec("DOCS/GUIDE/INTRO.TXT", true);
   QCOMPARE(summaries(), QStringList({"path commit"}));
+  mCommits->setPathspec("INTRO.txt", true);
+  QCOMPARE(summaries(), QStringList({"path commit"}));
+  mCommits->setPathspec("guide/in", true);
+  QCOMPARE(summaries(), QStringList({"path commit"}));
+  mCommits->setPathspec("*.TXT", true);
+  QVERIFY(summaries().contains("path commit"));
   mCommits->setPathspec("docs/x", true);
   QCOMPARE(summaries(), QStringList());
 
