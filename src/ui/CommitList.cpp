@@ -785,8 +785,14 @@ private:
       if (other.isRemoteBranch() && other.name().endsWith("/HEAD"))
         continue;
 
-      if (!other.target().contains(tip))
-        walker.hide(other);
+      // The chosen branch continues a branch that it contains, unless that
+      // is a main branch that hasn't moved since the chosen one started.
+      git::Commit target = other.target();
+      if (target.contains(tip) ||
+          (tip.contains(target) && !isMainBranch(repo, other)))
+        continue;
+
+      walker.hide(other);
     }
   }
 

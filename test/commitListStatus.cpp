@@ -641,6 +641,11 @@ void TestCommitListStatus::onlyBranches() {
   QVERIFY(create("refs/heads/brancha", "branch a", &between, &a));
   QVERIFY(create("refs/heads/branchb", "branch b", &fork, &b));
 
+  // Branch d continues branch c: fork point - branch c - branch d.
+  git_oid c, d;
+  QVERIFY(create("refs/heads/branchc", "branch c", &fork, &c));
+  QVERIFY(create("refs/heads/branchd", "branch d", &c, &d));
+
   // Both branches are merged into another one, like into a test branch.
   {
     git_commit *ca = nullptr, *cb = nullptr;
@@ -730,6 +735,13 @@ void TestCommitListStatus::onlyBranches() {
   QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("branch a"), 60000);
   QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
   QCOMPARE(summaries(), QStringList({"branch a", "between"}));
+
+  // Branch d: its commits and those of branch c that it continues.
+  QVERIFY2(names.contains("branchd"), qPrintable(names.join(", ")));
+  branches->setCurrentItem(branches->topLevelItem(names.indexOf("branchd")));
+  QTRY_VERIFY_WITH_TIMEOUT(summaries().contains("branch d"), 60000);
+  QTRY_VERIFY_WITH_TIMEOUT(!mView->isLoading(), 60000);
+  QCOMPARE(summaries(), QStringList({"branch d", "branch c"}));
 
   // Back to all branches with HEAD.
   show(false);
